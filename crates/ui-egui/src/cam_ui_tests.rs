@@ -272,6 +272,15 @@ fn simulate_reports_in_the_window_until_the_design_changes() {
     let flat = StockField { nx, ny, z: vec![0.0; nx * ny], deviation: Vec::new(), ..small.clone() };
     let tops = stock_triangles(&flat, 0.05).into_iter().filter(|([a, b, c], _)| a.z == 0.0 && b.z == 0.0 && c.z == 0.0).count();
     assert_eq!(tops, 2 * (ny - 1));
+    // Where a finer detail is drawn, the stock leaves its cells out, and the detail has no walls.
+    let hole = [100.0, 50.0, 300.0, 150.0];
+    let inside = |p: Vec3| p.x > 101.5 && p.x < 298.5 && p.y > 51.5 && p.y < 148.5;
+    let around = stock_triangles_in(&flat, 0.05, Some(hole), true);
+    assert!(!around.iter().any(|([a, b, c], _)| inside((*a + *b + *c) * (1.0 / 3.0))), "a stock triangle under the detail");
+    assert!(around.iter().any(|([a, b, c], _)| a.z < 0.0 || b.z < 0.0 || c.z < 0.0), "the stock keeps its walls");
+    let detail = StockField { nx: 40, ny: 20, cell: 0.25, origin: [150.0, 75.0], z: vec![0.0; 800], ..small.clone() };
+    let patch = stock_triangles_in(&detail, 0.05, None, false);
+    assert!(!patch.is_empty() && patch.iter().all(|([a, b, c], _)| a.z == 0.0 && b.z == 0.0 && c.z == 0.0), "no walls round a detail");
     let (shown, stamp, leftover) = stock_key(&h.app);
     h.app.preferences.cam_leftover_shown = 0;
     assert_ne!(stock_key(&h.app).2, leftover);

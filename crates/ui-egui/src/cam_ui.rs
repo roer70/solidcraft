@@ -626,7 +626,19 @@ pub fn stock_key(app: &SolveApp) -> (bool, u64, usize) {
 /// triangle's columns are cut through there is none: a hole. Material left on the part is
 /// marked from `leftover` thick (mm), a cut into it from the smallest.
 pub fn stock_triangles(field: &StockField, leftover: f64) -> Vec<([Vec3; 3], StockMark)> {
+    stock_triangles_in(field, leftover, None, true)
+}
+
+/// [`stock_triangles`], leaving out the cells wholly inside `hole` (`[x0, y0, x1, y1]` in work
+/// coordinates: where a finer detail is drawn instead), with the walls round the edge or not.
+fn stock_triangles_in(field: &StockField, leftover: f64, hole: Option<[f64; 4]>, walls: bool) -> Vec<([Vec3; 3], StockMark)> {
     let mut out = Vec::new();
+    let hidden = |i: usize, j: usize| {
+        hole.is_some_and(|[x0, y0, x1, y1]| {
+            let (lo_x, lo_y) = (field.origin[0] + (i as f64 + 0.5) * field.cell, field.origin[1] + (j as f64 + 0.5) * field.cell);
+            lo_x >= x0 && lo_y >= y0 && lo_x + field.cell <= x1 && lo_y + field.cell <= y1
+        })
+    };
     let mark = |d: [f64; 3]| {
         if d.iter().any(|d| *d < -SHOWN_DEVIATION) {
             StockMark::Gouge
@@ -651,9 +663,13 @@ pub fn stock_triangles(field: &StockField, leftover: f64) -> Vec<([Vec3; 3], Sto
     for j in 0..field.ny.saturating_sub(1) {
         let mut i = 0;
         while i + 1 < field.nx {
+            if hidden(i, j) {
+                i += 1;
+                continue;
+            }
             if let Some(run) = level(i, j) {
                 let mut end = i + 1;
-                while end + 1 < field.nx && level(end, j) == Some(run) {
+                while end + 1 < field.nx && !hidden(end, j) && level(end, j) == Some(run) {
                     end += 1;
                 }
                 if let (Some(a), Some(b), Some(c), Some(d)) =
@@ -684,6 +700,9 @@ pub fn stock_triangles(field: &StockField, leftover: f64) -> Vec<([Vec3; 3], Sto
             i += 1;
         }
     }
+    if !walls {
+        return out;
+    }
     // Walls round the edge, outward-facing: along each side, from the top's rim down to the bottom.
     let mut wall = |a: Option<(Vec3, Vec3, f64, bool)>, b: Option<(Vec3, Vec3, f64, bool)>| {
         if let (Some((a, a_floor, _, _)), Some((b, b_floor, _, _))) = (a, b) {
@@ -710,7 +729,17 @@ pub fn stock_scene(app: &SolveApp, sc: &mut crate::gpu::GpuScene) {
     let t = Tokens::get();
     let rgba = |c: egui::Color32| [c.r(), c.g(), c.b(), 255];
     let leftover = LEFTOVER_SHOWN.get(app.preferences.cam_leftover_shown).map_or(0.05, |l| l.1);
-    for (tri, mark) in stock_triangles(field, leftover) {
+    // A finer detail of where the view is zoomed in stands in for the stock's own cells there.
+    let detail = app.manufacture.patch.as_ref().filter(|(stamp, _)| *stamp == app.manufacture.stock_stamp).map(|(_, f)| f);
+    let hole = detail.map(|d| {
+        let (x, y) = (d.origin[0], d.origin[1]);
+        [x + 0.5 * d.cell, y + 0.5 * d.cell, x + (d.nx as f64 - 0.5) * d.cell, y + (d.ny as f64 - 0.5) * d.cell]
+    });
+    let mut tris = stock_triangles_in(field, leftover, hole, true);
+    if let Some(d) = detail {
+        tris.extend(stock_triangles_in(d, leftover, None, false));
+    }
+    for (tri, mark) in tris {
         let [a, b, c] = tri;
         let n = (b - a).cross(c - a).normalized().unwrap_or(Vec3::new(0.0, 0.0, 1.0)).to_f32();
         let colour = sc.color(rgba(match mark {
@@ -822,6 +851,14 @@ pub struct CamUi {
     sim_job: Option<(u64, std::sync::mpsc::Receiver<Result<Value, String>>)>,
     /// What a simulation still being worked out covers (its title), shown meanwhile.
     pub simulating: Option<String>,
+    /// A finer simulation of the part of the stock the view is zoomed in on, drawn over `stock`:
+    /// the `stock_stamp` it goes with, and its columns.
+    patch: Option<(u64, StockField)>,
+    /// The detail being worked out off the window thread: the `stock_stamp` it is for, and where it arrives.
+    #[cfg(not(target_arch = "wasm32"))]
+    patch_job: Option<(u64, std::sync::mpsc::Receiver<Result<Value, String>>)>,
+    /// The view as last seen, and since when (seconds): its detail is worked out once it keeps still.
+    view_still: Option<(u64, f64)>,
     /// `cam.list` worked out on a copy off the window thread (for the design revision given):
     /// 3D roughing toolpaths take seconds; the copy shares the engine's cache of them.
     #[cfg(not(target_arch = "wasm32"))]
@@ -922,6 +959,10 @@ impl Default for CamUi {
             #[cfg(not(target_arch = "wasm32"))]
             sim_job: None,
             simulating: None,
+            patch: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            patch_job: None,
+            view_still: None,
             #[cfg(not(target_arch = "wasm32"))]
             listing_job: None,
             last_listing: Value::Null,
@@ -2316,6 +2357,129 @@ fn simulation_arrived(app: &mut SolveApp) {
     app.manufacture.simulating = None;
 }
 
+/// Columns of a zoomed-in detail this many view points wide.
+const DETAIL_POINTS: f64 = 1.5;
+/// How long the view keeps still before its detail is worked out (seconds).
+const DETAIL_AFTER: f64 = 0.35;
+/// Most columns a zoomed-in detail has in all, and the finest it goes (mm).
+const DETAIL_CELLS: f64 = 1_500_000.0;
+const DETAIL_FINEST: f64 = 0.005;
+
+/// Where the view is zoomed in on the simulated stock and keeps still, simulates that part of it
+/// again on finer columns, off the window thread, and draws it over the stock once it arrives:
+/// close up, a cut's edge is as fine as the screen shows it.
+#[cfg(not(target_arch = "wasm32"))]
+fn zoom_detail(app: &mut SolveApp, ctx: &egui::Context) {
+    if let Some((stamp, rx)) = &app.manufacture.patch_job {
+        let result = match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(String::new()),
+        };
+        let fresh = *stamp == app.manufacture.stock_stamp;
+        app.manufacture.patch_job = None;
+        if let (true, Some(field)) = (fresh, result.ok().and_then(|v| StockField::from_json(&v["field"]))) {
+            app.manufacture.stock_stamp += 1;
+            app.manufacture.patch = Some((app.manufacture.stock_stamp, field));
+        }
+    }
+    let Some(rect) = app.viewport.rect else { return };
+    let cam = &app.manufacture;
+    if cfg!(test)
+        || cam.stock.is_none()
+        || cam.play.is_some()
+        || cam.simulating.is_some()
+        || !stock_shown(app)
+        || rect.width() < 1.0
+        || rect.height() < 1.0
+    {
+        return;
+    }
+    // The view keeps still long enough.
+    let c = app.cam;
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for v in [c.target.x, c.target.y, c.target.z, c.yaw, c.pitch, c.roll, c.distance, c.fov, f64::from(rect.width()), f64::from(rect.height())] {
+            v.to_bits().hash(&mut h);
+        }
+        h.finish()
+    };
+    let now = ctx.input(|i| i.time);
+    let since = match app.manufacture.view_still {
+        Some((k, since)) if k == key => since,
+        _ => {
+            app.manufacture.view_still = Some((key, now));
+            now
+        }
+    };
+    if now - since < DETAIL_AFTER {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(DETAIL_AFTER - (now - since)));
+        return;
+    }
+    let cam = &app.manufacture;
+    let (Some(stock), Some(setup)) = (cam.stock.as_ref(), cam.simulated) else { return };
+    // What the view shows of the stock, seen from the work frame's Z: its corners at the
+    // target's distance, with a margin, within the stock.
+    let (right, up, _) = c.basis();
+    let half_h = c.half_height();
+    let half_w = half_h * f64::from(rect.width()) / f64::from(rect.height());
+    let [o, x, y, _] = stock.frame;
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let d = c.target + right * (half_w * sx) + up * (half_h * sy) - o;
+        let (u, v) = (d.dot(x), d.dot(y));
+        (lo, hi) = ([lo[0].min(u), lo[1].min(v)], [hi[0].max(u), hi[1].max(v)]);
+    }
+    let margin = [(hi[0] - lo[0]) * 0.15, (hi[1] - lo[1]) * 0.15];
+    let (x0, y0) = ((lo[0] - margin[0]).max(stock.origin[0]), (lo[1] - margin[1]).max(stock.origin[1]));
+    let (x1, y1) = (
+        (hi[0] + margin[0]).min(stock.origin[0] + stock.nx as f64 * stock.cell),
+        (hi[1] + margin[1]).min(stock.origin[1] + stock.ny as f64 * stock.cell),
+    );
+    if !(x1 > x0 && y1 > y0) {
+        return;
+    }
+    let cell = (2.0 * half_w * DETAIL_POINTS / f64::from(rect.width())).max(DETAIL_FINEST).max(((x1 - x0) * (y1 - y0) / DETAIL_CELLS).sqrt());
+    // Not zoomed in far enough for finer columns to show.
+    if cell > stock.cell * 0.6 {
+        return;
+    }
+    // A detail of this view is there or on its way.
+    let covered = cam.patch.as_ref().is_some_and(|(stamp, d)| {
+        let (dx1, dy1) = (d.origin[0] + d.nx as f64 * d.cell, d.origin[1] + d.ny as f64 * d.cell);
+        *stamp == cam.stock_stamp
+            && d.origin[0] <= x0 + 1e-9
+            && d.origin[1] <= y0 + 1e-9
+            && dx1 >= x1 - 1e-9
+            && dy1 >= y1 - 1e-9
+            && d.cell <= cell * 1.5
+    });
+    if covered || cam.patch_job.is_some() {
+        return;
+    }
+    let top = stock.z.iter().copied().fold(stock.floor, f64::max);
+    if top <= stock.floor {
+        return;
+    }
+    let mut p = cam.scope.params(setup, "normal");
+    if let Some(o) = p.as_object_mut() {
+        o.remove("detail");
+        o.insert("stock".into(), json!({"min": [x0, y0, stock.floor], "max": [x1, y1, top]}));
+        o.insert("cell".into(), json!(cell));
+        o.insert("field".into(), json!(true));
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (mut copy, job, repaint) = (app.session.scratch(), cam.scope.clone(), ctx.clone());
+    let spawned = std::thread::Builder::new().name("cam-detail".into()).spawn(move || {
+        let _ = tx.send(job.run(&mut copy, |s| s.execute("cam.simulate", &p).map_err(|e| e.to_string())));
+        repaint.request_repaint();
+    });
+    if spawned.is_ok() {
+        app.manufacture.patch_job = Some((app.manufacture.stock_stamp, rx));
+    }
+}
+
 /// Keeps what a simulation of the window's scope found (`result`: `cam.simulate`'s answer).
 fn simulated(app: &mut SolveApp, result: Result<Value, String>) {
     let title = app.manufacture.scope.title.clone();
@@ -2627,13 +2791,14 @@ fn refresh(app: &mut SolveApp) {
             all.push(path);
         }
     }
-    // A simulation of the design as it was says nothing about it now, nor one being worked out for it.
+    // A simulation of the design as it was says nothing about it now, nor one being worked out
+    // for it; one started for the design as it is (just before these toolpaths) goes on.
     app.manufacture.play = None;
     app.manufacture.simulation = None;
-    app.manufacture.simulating = None;
     #[cfg(not(target_arch = "wasm32"))]
-    {
+    if app.manufacture.sim_job.as_ref().is_some_and(|(r, _)| *r != app.session.revision) {
         app.manufacture.sim_job = None;
+        app.manufacture.simulating = None;
     }
     app.manufacture.stock = None;
     app.manufacture.stock_stamp += 1;
@@ -5171,6 +5336,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     app.manufacture.repaint = Some(ctx.clone());
     #[cfg(not(target_arch = "wasm32"))]
     simulation_arrived(app);
+    #[cfg(not(target_arch = "wasm32"))]
+    zoom_detail(app, ctx);
     if app.manufacture.open && (app.manufacture.show_paths || app.manufacture.show_setups) {
         refresh(app);
     }
