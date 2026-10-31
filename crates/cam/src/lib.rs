@@ -39,7 +39,10 @@ pub use ops::{
 };
 pub use path::{Move, PathStats, Toolpath, arc_sweep};
 pub use post::{CommentStyle, LineNumbers, Post, Units};
-pub use sim::{Comparison, CutReport, DEFAULT_RAPID_RATE, HeightField, MAX_CELLS, Playback, Step, compare, deviations, gouge, simulate, tool_floor};
+pub use sim::{
+    Comparison, CutReport, DEFAULT_RAPID_RATE, HeightField, MAX_CELLS, Playback, Step, compare, compare_within, deviations, deviations_within, gouge,
+    simulate, tool_floor,
+};
 pub use tool::{
     CuttingData, Holder, HolderSection, MAX_CHIP_LOAD, MAX_HOLDER_NAME, MAX_HOLDER_SECTIONS, MAX_HOLDERS, MAX_MATERIAL_NAME, MAX_MATERIALS,
     MAX_SURFACE_SPEED, Tool, ToolKind, holder_name, material_name, rpm_from_surface_speed, same_material, surface_speed_from_rpm,

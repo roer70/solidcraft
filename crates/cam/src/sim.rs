@@ -583,21 +583,47 @@ pub struct Comparison {
 /// over is neither a gouge nor leftover; past the field's border there is no part (its floor),
 /// so a part edge on the border is treated the same.
 pub fn deviations(stock: &HeightField, part: &HeightField) -> Result<Vec<f64>> {
+    deviations_within(stock, part, 0.0)
+}
+
+/// [`deviations`], with the part's columns within `reach` (mm) of a column around it as well, at
+/// least the next ones: the part's triangles stand up to their mesh's tolerance off its true
+/// faces, which a toolpath follows, so an edge that far over is neither a gouge nor leftover.
+pub fn deviations_within(stock: &HeightField, part: &HeightField, reach: f64) -> Result<Vec<f64>> {
     if stock.nx != part.nx || stock.ny != part.ny || stock.z.len() != part.z.len() {
         return invalid("the stock and the part are not on the same columns");
     }
+    if !reach.is_finite() || reach < 0.0 {
+        return invalid("the reach must be a length of 0 or more");
+    }
     let tol = 1e-6;
+    let (nx, ny) = (part.nx, part.ny);
+    // Columns either side, capped so a coarse mesh on a fine field stays a window, not the field.
+    let k = ((reach / part.cell - 1e-9).ceil().max(1.0) as usize).min(64);
+    // The window's lowest and highest part, one axis at a time: along each row, then down the
+    // columns. Past the border is the floor for the lowest and nothing for the highest.
+    let (mut row_lo, mut row_hi) = (vec![part.floor; nx * ny], vec![f64::NEG_INFINITY; nx * ny]);
+    for j in 0..ny {
+        for i in 0..nx {
+            let (mut lo, mut hi) = (if i < k || i + k >= nx { part.floor } else { f64::INFINITY }, f64::NEG_INFINITY);
+            for ni in i.saturating_sub(k)..(i + k + 1).min(nx) {
+                if let Some(p) = part.get(ni, j) {
+                    (lo, hi) = (lo.min(p), hi.max(p));
+                }
+            }
+            if let (Some(l), Some(h)) = (row_lo.get_mut(j * nx + i), row_hi.get_mut(j * nx + i)) {
+                (*l, *h) = (lo, hi);
+            }
+        }
+    }
     let mut out = Vec::with_capacity(stock.z.len());
-    for j in 0..stock.ny {
-        for i in 0..stock.nx {
+    for j in 0..ny {
+        for i in 0..nx {
             let h = stock.get(i, j).unwrap_or(stock.floor);
-            let (mut lowest, mut highest) = (f64::INFINITY, f64::NEG_INFINITY);
-            for (di, dj) in (-1i64..=1).flat_map(|di| (-1i64..=1).map(move |dj| (di, dj))) {
-                let (ni, nj) = (i as i64 + di, j as i64 + dj);
-                let p = if ni < 0 || nj < 0 { None } else { part.get(ni as usize, nj as usize) };
-                match p {
-                    Some(p) => (lowest, highest) = (lowest.min(p), highest.max(p)),
-                    None => lowest = lowest.min(part.floor),
+            let (mut lowest, mut highest) = (if j < k || j + k >= ny { part.floor } else { f64::INFINITY }, f64::NEG_INFINITY);
+            for nj in j.saturating_sub(k)..(j + k + 1).min(ny) {
+                if let (Some(l), Some(h)) = (row_lo.get(nj * nx + i), row_hi.get(nj * nx + i)) {
+                    (lowest, highest) = (lowest.min(*l), highest.max(*h));
                 }
             }
             out.push(if h < lowest - tol {
@@ -653,9 +679,14 @@ fn outside_the_part(part: &HeightField) -> Vec<bool> {
 
 /// Compares the cut `stock` with the `part` (see [`deviations`]).
 pub fn compare(stock: &HeightField, part: &HeightField) -> Result<Comparison> {
+    compare_within(stock, part, 0.0)
+}
+
+/// [`compare`], with the part's columns within `reach` (mm) around (see [`deviations_within`]).
+pub fn compare_within(stock: &HeightField, part: &HeightField, reach: f64) -> Result<Comparison> {
     let area = stock.cell * stock.cell;
     let mut out = Comparison::default();
-    for d in deviations(stock, part)? {
+    for d in deviations_within(stock, part, reach)? {
         if d < 0.0 {
             out.max_gouge = out.max_gouge.max(-d);
             out.gouge_area += area;

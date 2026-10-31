@@ -261,8 +261,17 @@ fn simulate_reports_in_the_window_until_the_design_changes() {
         bottom: Vec::new(),
         deviation: vec![0.02, 0.02, 0.3, 0.02, 0.02, 0.3],
     };
-    let left = |threshold: f64| stock_triangles(&small, threshold).into_iter().filter(|t| t.1 == StockMark::Leftover).count();
-    assert_eq!((left(0.001), left(0.05), left(0.5)), (4, 2, 0), "the cusps only at the finest");
+    // The area marked (flat cells alike are drawn as one quad, so triangles are not counted).
+    let left = |threshold: f64| -> f64 {
+        let tris = stock_triangles(&small, threshold).into_iter().filter(|t| t.1 == StockMark::Leftover);
+        tris.map(|([a, b, c], _)| (b - a).cross(c - a).len() / 2.0).sum()
+    };
+    assert_eq!((left(0.001), left(0.05), left(0.5)), (2.0, 1.0, 0.0), "the cusps only at the finest");
+    // A fine, uncut stock is drawn with a quad a row, not two triangles a column.
+    let (nx, ny) = (400, 200);
+    let flat = StockField { nx, ny, z: vec![0.0; nx * ny], deviation: Vec::new(), ..small.clone() };
+    let tops = stock_triangles(&flat, 0.05).into_iter().filter(|([a, b, c], _)| a.z == 0.0 && b.z == 0.0 && c.z == 0.0).count();
+    assert_eq!(tops, 2 * (ny - 1));
     let (shown, stamp, leftover) = stock_key(&h.app);
     h.app.preferences.cam_leftover_shown = 0;
     assert_ne!(stock_key(&h.app).2, leftover);

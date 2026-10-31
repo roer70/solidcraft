@@ -287,6 +287,28 @@ fn simulation_checks_the_program_against_the_model() {
     assert!(sim["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("rapid move(s) run into material")));
     assert_eq!(sim["columns"], json!([120, 80]));
 
+    // By detail, the columns follow the finest thing the operations cut, within each detail's
+    // bounds: never coarser than 300 across at normal, finer at fine, coarser at coarse.
+    let cell = |s: &mut Session, detail: &str| run(s, "cam.simulate", json!({ "detail": detail }))["cell"].as_f64().unwrap();
+    let (coarse, normal, fine) = (cell(&mut s, "coarse"), cell(&mut s, "normal"), cell(&mut s, "fine"));
+    assert!(coarse > normal && normal > fine && normal <= 60.0 / 300.0 + 1e-9 && fine >= 60.0 / 2000.0 - 1e-9, "{coarse} {normal} {fine}");
+    // A small tool asks for finer columns than the larger ones did.
+    let stepover = run(&mut s, "cam.list", json!({}))["setups"][0]["operations"][0]["inputs"]["stepover"].clone();
+    run(&mut s, "cam.op.edit", json!({"op": "Pocket1", "stepover": 0.4}));
+    run(&mut s, "cam.tool.define", json!({"number": 1, "kind": "flat", "diameter": 1, "flute_length": 5}));
+    let small = cell(&mut s, "normal");
+    assert!(small < normal, "{small} {normal}");
+    // On a large square stock the detail's cells in all bound it, where columns across alone would not.
+    let square = json!({"stock": {"min": [0, 0, -10], "max": [400, 400, 0]}, "detail": "fine"});
+    let columns = run(&mut s, "cam.simulate", square)["columns"].clone();
+    let (nx, ny) = (columns[0].as_u64().unwrap(), columns[1].as_u64().unwrap());
+    assert!(nx * ny <= solidcraft_cam::MAX_CELLS as u64 && nx > 1000, "{columns}");
+    run(&mut s, "cam.tool.define", json!({"number": 1, "kind": "flat", "diameter": 6, "flute_length": 1}));
+    run(&mut s, "cam.op.edit", json!({"op": "Pocket1", "stepover": stepover}));
+    for bad in [json!({"detail": "rough"}), json!({"detail": "fine", "cell": 1}), json!({"detail": "fine", "columns": 300})] {
+        assert!(s.execute("cam.simulate", &bad).is_err(), "{bad}");
+    }
+
     // The cut stock itself, for drawing: one height and one deviation per column, in world coordinates.
     let field = &run(&mut s, "cam.simulate", json!({"field": true, "cell": 1}))["field"];
     let sizes = (field["nx"].as_u64(), field["ny"].as_u64(), field["z"].as_array().map(Vec::len), field["deviation"].as_array().map(Vec::len));

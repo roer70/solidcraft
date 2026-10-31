@@ -86,8 +86,9 @@ fn fitted_dropdown(ui: &mut egui::Ui, id: &str, index: &mut usize, options: &[&s
     ui.allocate_ui(egui::vec2(width, ui_kit::row_height()), |ui| crate::ui_kit::dropdown(ui, id, index, options)).inner
 }
 
-/// The simulation's detail: a name and how many columns along the stock's longer side.
-const SIM_DETAIL: [(&str, u32); 3] = [("coarse", 150), ("normal", 300), ("fine", 700)];
+/// How finely a simulation looks at the stock, as `cam.simulate` takes it: from the finest thing
+/// the operations cut (the smallest tool, a chamfer), a half, a quarter or an eighth of it a column.
+const SIM_DETAIL: [&str; 3] = ["coarse", "normal", "fine"];
 /// Most toolpath segments drawn.
 const MAX_SEGMENTS: usize = 400_000;
 
@@ -635,11 +636,43 @@ pub fn stock_triangles(field: &StockField, leftover: f64) -> Vec<([Vec3; 3], Sto
             StockMark::Fine
         }
     };
+    // A cell between four columns of material at one height, top and bottom, one mark: it can
+    // join the next ones like it into one quad (most of a fine field is flat).
+    let level = |i: usize, j: usize| -> Option<(f64, f64, StockMark)> {
+        let ks = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)].map(|(i, j)| j * field.nx + i);
+        let z = ks.map(|k| field.z.get(k).copied());
+        let base = ks.map(|k| field.bottom.get(k).copied().unwrap_or(field.floor));
+        let first = z[0]?;
+        let flat = z.iter().all(|v| *v == Some(first)) && base.iter().all(|b| *b == base[0]) && first > base[0].max(field.floor) + 1e-9;
+        let d = ks.map(|k| field.deviation.get(k).copied().unwrap_or(0.0));
+        let marks = (mark([d[0], d[1], d[2]]), mark([d[0], d[2], d[3]]));
+        (flat && marks.0 == marks.1).then_some((first, base[0], marks.0))
+    };
     for j in 0..field.ny.saturating_sub(1) {
-        for i in 0..field.nx.saturating_sub(1) {
+        let mut i = 0;
+        while i + 1 < field.nx {
+            if let Some(run) = level(i, j) {
+                let mut end = i + 1;
+                while end + 1 < field.nx && level(end, j) == Some(run) {
+                    end += 1;
+                }
+                if let (Some(a), Some(b), Some(c), Some(d)) =
+                    (field.column(i, j), field.column(end, j), field.column(end, j + 1), field.column(i, j + 1))
+                {
+                    for [p, q, r] in [[a, b, c], [a, c, d]] {
+                        out.push(([p.0, q.0, r.0], run.2));
+                        if !field.bottom.is_empty() {
+                            out.push(([p.1, r.1, q.1], StockMark::Fine));
+                        }
+                    }
+                }
+                i = end;
+                continue;
+            }
             let (Some(a), Some(b), Some(c), Some(d)) =
                 (field.column(i, j), field.column(i + 1, j), field.column(i + 1, j + 1), field.column(i, j + 1))
             else {
+                i += 1;
                 continue;
             };
             for [p, q, r] in [[a, b, c], [a, c, d]].into_iter().filter(|t| t.iter().any(|x| x.3)) {
@@ -648,6 +681,7 @@ pub fn stock_triangles(field: &StockField, leftover: f64) -> Vec<([Vec3; 3], Sto
                     out.push(([p.1, r.1, q.1], StockMark::Fine));
                 }
             }
+            i += 1;
         }
     }
     // Walls round the edge, outward-facing: along each side, from the top's rim down to the bottom.
@@ -782,6 +816,12 @@ pub struct CamUi {
     /// command it is for, and where it arrives.
     #[cfg(not(target_arch = "wasm32"))]
     preview_job: Option<(u64, Value, std::sync::mpsc::Receiver<Result<solidcraft_engine::CamPreview, String>>)>,
+    /// A simulation worked out on a copy off the window thread: the design revision it is for,
+    /// and where it arrives.
+    #[cfg(not(target_arch = "wasm32"))]
+    sim_job: Option<(u64, std::sync::mpsc::Receiver<Result<Value, String>>)>,
+    /// What a simulation still being worked out covers (its title), shown meanwhile.
+    pub simulating: Option<String>,
     /// `cam.list` worked out on a copy off the window thread (for the design revision given):
     /// 3D roughing toolpaths take seconds; the copy shares the engine's cache of them.
     #[cfg(not(target_arch = "wasm32"))]
@@ -879,6 +919,9 @@ impl Default for CamUi {
             preview: None,
             #[cfg(not(target_arch = "wasm32"))]
             preview_job: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            sim_job: None,
+            simulating: None,
             #[cfg(not(target_arch = "wasm32"))]
             listing_job: None,
             last_listing: Value::Null,
@@ -2140,8 +2183,8 @@ pub struct SimScope {
 
 impl SimScope {
     /// `cam.simulate`'s and `cam_playback`'s parameters for it.
-    fn params(&self, setup: u64, columns: u32) -> Value {
-        let mut p = json!({ "setup": setup, "columns": columns, "first": self.first });
+    fn params(&self, setup: u64, detail: &str) -> Value {
+        let mut p = json!({ "setup": setup, "detail": detail, "first": self.first });
         if let Some(ops) = &self.ops {
             p["ops"] = json!(ops);
         }
@@ -2226,12 +2269,57 @@ fn simulate_scope(app: &mut SolveApp, setup: u64, scope: SimScope) {
     app.manufacture.play = None;
     app.manufacture.stock_stamp += 1;
     app.manufacture.simulated = Some(setup);
-    let columns = SIM_DETAIL.get(app.manufacture.sim_detail).map_or(300, |d| d.1);
-    let mut p = scope.params(setup, columns);
+    let detail = SIM_DETAIL.get(app.manufacture.sim_detail).copied().unwrap_or("normal");
+    let mut p = scope.params(setup, detail);
     p["field"] = json!(true);
+    // A fine simulation takes seconds: worked out on a copy off the window thread, which says
+    // so meanwhile and takes the result when it arrives (see `simulation_arrived`).
+    #[cfg(not(target_arch = "wasm32"))]
+    if !cfg!(test) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (mut copy, job, params, repaint) = (app.session.scratch(), scope.clone(), p.clone(), app.manufacture.repaint.clone());
+        let spawned = std::thread::Builder::new().name("cam-simulate".into()).spawn(move || {
+            let _ = tx.send(job.run(&mut copy, |s| s.execute("cam.simulate", &params).map_err(|e| e.to_string())));
+            if let Some(ctx) = repaint {
+                ctx.request_repaint();
+            }
+        });
+        if spawned.is_ok() {
+            (app.manufacture.simulation, app.manufacture.stock) = (None, None);
+            app.manufacture.simulating = Some(scope.title.clone());
+            app.manufacture.sim_job = Some((app.session.revision, rx));
+            app.manufacture.scope = scope;
+            return;
+        }
+    }
     let result = scope.run(&mut app.session, |s| s.execute("cam.simulate", &p).map_err(|e| e.to_string()));
-    let title = scope.title.clone();
     app.manufacture.scope = scope;
+    simulated(app, result);
+}
+
+/// Takes a simulation worked out off the window thread once it has arrived, if the design is
+/// still the one it was worked out for.
+#[cfg(not(target_arch = "wasm32"))]
+fn simulation_arrived(app: &mut SolveApp) {
+    let Some((revision, rx)) = &app.manufacture.sim_job else { return };
+    let result = match rx.try_recv() {
+        Ok(result) => result,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(tm("The simulation stopped unexpectedly").to_string()),
+    };
+    let current = *revision == app.session.revision;
+    app.manufacture.sim_job = None;
+    if current {
+        let _language = crate::i18n::scope(&app.preferences.language);
+        simulated(app, result);
+    }
+    app.manufacture.simulating = None;
+}
+
+/// Keeps what a simulation of the window's scope found (`result`: `cam.simulate`'s answer).
+fn simulated(app: &mut SolveApp, result: Result<Value, String>) {
+    let title = app.manufacture.scope.title.clone();
+    app.manufacture.stock_stamp += 1;
     match result {
         Ok(v) => {
             let number = |k: &str| v[k].as_f64();
@@ -2262,10 +2350,10 @@ fn simulate_scope(app: &mut SolveApp, setup: u64, scope: SimScope) {
 
 /// Starts playing a setup's program from its beginning, on the simulation's columns.
 pub fn start_play(app: &mut SolveApp, setup: u64) {
-    let columns = SIM_DETAIL.get(app.manufacture.sim_detail).map_or(300, |d| d.1);
+    let detail = SIM_DETAIL.get(app.manufacture.sim_detail).copied().unwrap_or("normal");
     // What the simulation covered is what plays.
     let scope = app.manufacture.scope.clone();
-    let mut p = scope.params(setup, columns);
+    let mut p = scope.params(setup, detail);
     p["rapid_rate"] = json!(app.manufacture.rapid_rate);
     match scope.run(&mut app.session, |s| solidcraft_engine::cam_playback(s, &p).map_err(|e| e.to_string())) {
         Ok(data) => {
@@ -2539,9 +2627,14 @@ fn refresh(app: &mut SolveApp) {
             all.push(path);
         }
     }
-    // A simulation of the design as it was says nothing about it now.
+    // A simulation of the design as it was says nothing about it now, nor one being worked out for it.
     app.manufacture.play = None;
     app.manufacture.simulation = None;
+    app.manufacture.simulating = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.manufacture.sim_job = None;
+    }
     app.manufacture.stock = None;
     app.manufacture.stock_stamp += 1;
     // These commands are not changes, but keep the key the revision as it is now.
@@ -5039,6 +5132,15 @@ fn manufacture_window(ctx: &egui::Context, cam: &mut CamUi, listed: &Value, dock
 /// What the last simulation found (its first line says what it covered), and its playback.
 fn simulation_block(ui: &mut egui::Ui, cam: &mut CamUi, asked: &mut Asked) {
     let t = Tokens::get();
+    if let Some(title) = &cam.simulating {
+        ui.separator();
+        ui.label(RichText::new(title).strong());
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(RichText::new(tm("Simulating…")).color(t.text_dim));
+        });
+        return;
+    }
     let Some((found, warnings)) = &cam.simulation else { return };
     ui.separator();
     for (k, line) in found.iter().enumerate() {
@@ -5051,7 +5153,7 @@ fn simulation_block(ui: &mut egui::Ui, cam: &mut CamUi, asked: &mut Asked) {
     ui.horizontal_wrapped(|ui| {
         crate::ui_kit::checkbox(ui, tm("Simulated stock"), &mut cam.show_stock);
         // Finer shows the cut stock closer to the toolpaths, and takes longer.
-        let detail = SIM_DETAIL.map(|d| d.0);
+        let detail = SIM_DETAIL;
         if small_choice(ui, "sc_cam_sim_detail", "Detail", "Simulation detail", &mut cam.sim_detail, &detail) {
             asked.resimulate = true;
         }
@@ -5067,6 +5169,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     tick(app, ctx);
     app.manufacture.repaint = Some(ctx.clone());
+    #[cfg(not(target_arch = "wasm32"))]
+    simulation_arrived(app);
     if app.manufacture.open && (app.manufacture.show_paths || app.manufacture.show_setups) {
         refresh(app);
     }
@@ -5692,7 +5796,7 @@ pub fn preferences(app: &mut SolveApp, ui: &mut egui::Ui) {
         };
         choice(ui, "pref_cam_colour", "Toolpath colour", &mut prefs.cam_path_colour, &PATH_COLOURS);
         choice(ui, "pref_cam_width", "Toolpath width", &mut prefs.cam_path_width, &PATH_WIDTHS.map(|w| w.0));
-        choice(ui, "pref_cam_detail", "Simulation detail", &mut prefs.cam_sim_detail, &SIM_DETAIL.map(|d| d.0));
+        choice(ui, "pref_cam_detail", "Simulation detail", &mut prefs.cam_sim_detail, &SIM_DETAIL);
         choice(ui, "pref_cam_leftover", "Leftover shown from", &mut prefs.cam_leftover_shown, &LEFTOVER_SHOWN.map(|l| l.0));
         crate::ui_kit::row(ui, tm("Rapid rate"), |ui| crate::ui_kit::number_field(ui, &mut prefs.cam_rapid_rate, 100.0..=100_000.0, 50.0, " mm/min"))
             .on_hover_text(help("Rapid rate").map(tm).unwrap_or_default());

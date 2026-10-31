@@ -174,7 +174,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         "setup?: id or name; ops?: [id or name, …] the operations to cut and report (default: every one); first?: [id or name, …] operations cut \
          before them without a report, for the stock they leave (one operation on the stock the ones before it left: ops [it], first [those before]); \
          stock?: {min: [x, y, z], max: [x, y, z]} in the setup's work coordinates (default: the setup's stock); cell?: column \
-         width in mm (default: the stock's longer side / 300) — or columns?: how many along the stock's longer side (10 to 2000) → per operation removed_volume, rapid_collisions, max_engagement and warnings; and \
+         width in mm (default: the stock's longer side / 300) — or columns?: how many along the stock's longer side (10 to 2000) — or detail?: \
+         coarse|normal|fine, columns from the finest thing the operations cut (the smallest tool's radius, a chamfer's width: a half, a quarter, \
+         an eighth of it; 150–600, 300–1200, 700–2000 across) → per operation removed_volume, rapid_collisions, max_engagement and warnings; and \
          against the bodies: max_gouge, gouge_area (cut into the part), max_leftover, leftover_volume (left on it); field?: bool, also the cut stock as columns {frame, origin, cell, nx, ny, floor, z: [nx × ny heights], \
          deviation: [per column: below 0 cut into the part, above 0 left on it]} in work coordinates, with the frame that places them. Top-down: undercuts are not seen",
     ),
@@ -4027,14 +4029,61 @@ fn start_stock(s: &Session, setup: &Setup, at: &Resolved, p: &Value, cmd: &str) 
     Ok((field, block))
 }
 
-fn sim_block(p: &Value, cmd: &str, at: &Resolved) -> Result<(cam::HeightField, Box3)> {
-    let (min, max) = match p.get("stock") {
+/// The raw block a simulation cuts: `stock` ({min, max}) or the setup's.
+fn sim_box(p: &Value, cmd: &str, at: &Resolved) -> Result<Box3> {
+    match p.get("stock") {
         Some(v) => {
             let corner = |k: &str| v.get(k).and_then(vec3).ok_or_else(|| bad(cmd, "`stock` must be {min: [x, y, z], max: [x, y, z]}"));
-            (corner("min")?, corner("max")?)
+            Ok((corner("min")?, corner("max")?))
         }
-        None => at.stock.ok_or_else(|| bad(cmd, "there is no body to take the stock from; give `stock`"))?,
-    };
+        None => at.stock.ok_or_else(|| bad(cmd, "there is no body to take the stock from; give `stock`")),
+    }
+}
+
+/// How finely each `detail` of a simulation looks: the finest thing the operations cut (the
+/// smallest tool's radius, a chamfer's width) over this many columns, within this few and this
+/// many across the stock's longer side, and this many in all (a square stock fits fewer across).
+const SIM_DETAIL: [(&str, f64, f64, f64, f64); 3] =
+    [("coarse", 2.0, 150.0, 600.0, 360_000.0), ("normal", 4.0, 300.0, 1200.0, 1_200_000.0), ("fine", 8.0, 700.0, 2000.0, 3_000_000.0)];
+
+/// `p` with the `cell` its `detail` asks for, from the operations simulated (`shown` and `first`);
+/// as it is without `detail`.
+fn with_detail(s: &Session, setup: &Setup, at: &Resolved, p: &Value, cmd: &str, shown: &[usize], first: &[usize]) -> Result<Value> {
+    let Some(detail) = p.get("detail").filter(|v| !v.is_null()) else { return Ok(p.clone()) };
+    if p.get("cell").is_some() || p.get("columns").is_some() {
+        return Err(bad(cmd, "give one of `detail`, `columns` and `cell`"));
+    }
+    let &(_, parts, fewest, most, budget) =
+        SIM_DETAIL.iter().find(|d| detail.as_str() == Some(d.0)).ok_or_else(|| bad(cmd, "`detail` must be coarse, normal or fine"))?;
+    let (min, max) = sim_box(p, cmd, at)?;
+    let longer = (max.x - min.x).max(max.y - min.y);
+    let finest = shown
+        .iter()
+        .chain(first)
+        .filter_map(|i| setup.operations.get(*i))
+        .flat_map(|op| {
+            let radius = s.doc.manufacture.tool(op.tool).map(|t| t.diameter / 2.0);
+            let width = match &op.kind {
+                CamOperationKind::Chamfer { width, .. } => s.doc.eval(width, Kind::Length).ok(),
+                _ => None,
+            };
+            [radius, width].into_iter().flatten().filter(|v| v.is_finite() && *v > 0.0)
+        })
+        .fold(f64::INFINITY, f64::min);
+    let columns = if finest.is_finite() { (longer * parts / finest).clamp(fewest, most) } else { fewest };
+    // No finer than the detail's columns in all allow.
+    let area = (max.x - min.x).max(0.0) * (max.y - min.y).max(0.0);
+    let cell = (longer / columns).max((area / budget).sqrt()).max(0.02);
+    let mut out = p.clone();
+    if let Some(o) = out.as_object_mut() {
+        o.remove("detail");
+        o.insert("cell".into(), json!(cell));
+    }
+    Ok(out)
+}
+
+fn sim_block(p: &Value, cmd: &str, at: &Resolved) -> Result<(cam::HeightField, Box3)> {
+    let (min, max) = sim_box(p, cmd, at)?;
     let cell = match (p.get("cell"), p.get("columns")) {
         (Some(_), _) => num(p, "cell").filter(|c| *c > 0.0).ok_or_else(|| bad(cmd, "`cell` must be above 0"))?,
         (None, Some(_)) => {
@@ -4083,8 +4132,9 @@ pub fn cam_playback(s: &Session, p: &Value) -> Result<CamPlayback> {
         return Err(bad(cmd, format!("setup `{}` has no operation", setup.name)));
     }
     let at = resolve(s, setup).map_err(|e| bad(cmd, e))?;
-    let (mut stock, _) = start_stock(s, setup, &at, p, cmd)?;
     let (shown, first) = simulated_ops(setup, p, cmd)?;
+    let p = &with_detail(s, setup, &at, p, cmd, &shown, &first)?;
+    let (mut stock, _) = start_stock(s, setup, &at, p, cmd)?;
     // The operations cut first leave the stock the played ones start from.
     for op in first.iter().filter_map(|i| setup.operations.get(*i)) {
         let tool = s.doc.manufacture.tool(op.tool).ok_or_else(|| bad(cmd, format!("no tool {}", op.tool)))?;
@@ -4114,9 +4164,12 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     let at = resolve(s, setup).map_err(|e| bad(cmd, e))?;
     let state = s.model.state();
     let meshes: Vec<_> = state.bodies.iter().filter(|b| at.is_part(&b.name)).map(|b| b.mesh()).collect();
+    // How far the part's triangles may stand off its true faces, which the toolpaths follow.
+    let reach = state.bodies.iter().filter(|b| at.is_part(&b.name)).map(|b| b.display_tol()).fold(0.0, f64::max);
+    let (shown, first) = simulated_ops(setup, p, cmd)?;
+    let p = &with_detail(s, setup, &at, p, cmd, &shown, &first)?;
     let (mut stock, (min, max)) = start_stock(s, setup, &at, p, cmd)?;
     let cell = stock.cell;
-    let (shown, first) = simulated_ops(setup, p, cmd)?;
     let fixtures = fixtures_of(s, &at);
     let mut ops = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -4166,9 +4219,9 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
         let seen = cam::HeightField::of_triangles(Vec2::new(min.x, min.y), Vec2::new(max.x, max.y), cell, min.z, &part_triangles(s, &at), false);
         match seen {
             Ok(part) => {
-                let c = cam::compare(&stock, &part).map_err(cam_error)?;
+                let c = cam::compare_within(&stock, &part, reach).map_err(cam_error)?;
                 let checked = match &plain {
-                    Some(plain) => cam::compare(plain, &part).map_err(cam_error)?,
+                    Some(plain) => cam::compare_within(plain, &part, reach).map_err(cam_error)?,
                     None => c,
                 };
                 // A column's width of error is expected at walls; less than that is not reported.
@@ -4183,14 +4236,14 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
                     cam::HeightField::of_triangles(Vec2::new(min.x, min.y), Vec2::new(max.x, max.y), cell, min.z, &raised, false).ok()
                 });
                 let over = match &kept {
-                    Some(raised) => cam::compare(&stock, raised).map_err(cam_error)?,
+                    Some(raised) => cam::compare_within(&stock, raised, reach).map_err(cam_error)?,
                     None => c,
                 };
                 out["max_leftover"] = json!(over.max_leftover);
                 out["leftover_volume"] = json!(over.leftover_volume);
-                let mut dev = cam::deviations(&stock, &part).map_err(cam_error)?;
+                let mut dev = cam::deviations_within(&stock, &part, reach).map_err(cam_error)?;
                 if let Some(raised) = &kept {
-                    for (d, over) in dev.iter_mut().zip(cam::deviations(&stock, raised).map_err(cam_error)?) {
+                    for (d, over) in dev.iter_mut().zip(cam::deviations_within(&stock, raised, reach).map_err(cam_error)?) {
                         if *d > 0.0 {
                             *d = over.max(0.0);
                         }
@@ -4198,7 +4251,7 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 // Where only a chamfer went below the part, it is the chamfer, not a fault.
                 if let Some(plain) = &plain {
-                    let without = cam::deviations(plain, &part).map_err(cam_error)?;
+                    let without = cam::deviations_within(plain, &part, reach).map_err(cam_error)?;
                     for (((d, cut), uncut), w) in dev.iter_mut().zip(&stock.z).zip(&plain.z).zip(&without) {
                         if *d < 0.0 && *cut < *uncut - 1e-9 {
                             *d = w.min(0.0);

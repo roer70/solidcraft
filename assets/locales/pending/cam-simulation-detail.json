@@ -1,0 +1,18 @@
+{
+  "en": {
+    "manufacture.simulating": "Simulating…",
+    "manufacture.simulation_stopped": "The simulation stopped unexpectedly"
+  },
+  "de": {
+    "manufacture.simulating": "Simulation läuft…",
+    "manufacture.simulation_stopped": "Die Simulation wurde unerwartet beendet"
+  },
+  "ja": {
+    "manufacture.simulating": "シミュレーション中…",
+    "manufacture.simulation_stopped": "シミュレーションが予期せず停止しました"
+  },
+  "zh": {
+    "manufacture.simulating": "正在模拟…",
+    "manufacture.simulation_stopped": "模拟意外停止"
+  }
+}

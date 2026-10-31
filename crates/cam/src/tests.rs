@@ -1563,6 +1563,34 @@ fn a_part_edge_on_the_stock_s_border_is_no_gouge() {
 }
 
 #[test]
+fn a_wall_off_by_the_mesh_s_tolerance_is_no_gouge_on_fine_columns() {
+    // On columns 0.05 mm wide, a pocket's wall whose triangles stand at x = 4.92 (a chord inside
+    // a curve), and the stock cut to `wall` (where the toolpath took it).
+    let part = HeightField::block(Vec3::new(0.0, 0.0, -10.0), Vec3::new(10.0, 2.0, 0.0), 0.05).unwrap();
+    let shape = |field: &HeightField, wall: f64| {
+        let mut out = field.clone();
+        for j in 0..out.ny {
+            for i in 0..out.nx {
+                let x = out.origin.x + (i as f64 + 0.5) * out.cell;
+                if let Some(z) = out.z.get_mut(j * out.nx + i) {
+                    *z = if x < wall { -5.0 } else { 0.0 };
+                }
+            }
+        }
+        out
+    };
+    let (part, cut) = (shape(&part, 4.92), shape(&part, 5.0));
+    // Compared with the next columns only, the true wall reads as cut into the part.
+    close(compare(&cut, &part).unwrap().max_gouge, 5.0, 1e-9);
+    // Within the mesh's tolerance it is not; within less, it is still.
+    close(compare_within(&cut, &part, 0.1).unwrap().max_gouge, 0.0, 1e-9);
+    close(compare_within(&cut, &part, 0.02).unwrap().max_gouge, 5.0, 1e-9);
+    // A wall cut 0.3 mm past the triangles is one, tolerance or not.
+    close(compare_within(&shape(&part, 5.22), &part, 0.1).unwrap().max_gouge, 5.0, 1e-9);
+    assert!(compare_within(&cut, &part, f64::NAN).is_err());
+}
+
+#[test]
 fn stock_round_a_round_part_is_waste_and_an_uncut_hole_is_left_material() {
     // A disc of radius 15 with a hole of radius 4, in a square block.
     let mut part = HeightField::block(Vec3::new(0.0, 0.0, -10.0), Vec3::new(40.0, 40.0, 0.0), 0.5).unwrap();
