@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "tool": "claude",
+  "session": "e0debd80-70e0-412e-9ed9-e8059c65af67",
+  "who": "Robert Eriksson",
+  "start": "2026-11-05T11:10:42Z",
+  "end": "2026-11-05T21:03:06Z",
+  "active_ms": 4789488,
+  "active_spans": [
+    {
+      "from": "2026-11-05T11:10:42Z",
+      "to": "2026-11-05T11:45:15Z"
+    },
+    {
+      "from": "2026-11-05T12:09:08Z",
+      "to": "2026-11-05T12:25:45Z"
+    },
+    {
+      "from": "2026-11-05T13:13:00Z",
+      "to": "2026-11-05T13:39:52Z"
+    },
+    {
+      "from": "2026-11-05T14:26:40Z",
+      "to": "2026-11-05T14:27:06Z"
+    },
+    {
+      "from": "2026-11-05T14:42:11Z",
+      "to": "2026-11-05T14:42:50Z"
+    },
+    {
+      "from": "2026-11-05T21:02:24Z",
+      "to": "2026-11-05T21:03:06Z"
+    }
+  ],
+  "models": [
+    {
+      "model": "claude-opus-5-5",
+      "input_tokens": 296,
+      "output_tokens": 68391,
+      "cache_read_tokens": 20136481,
+      "cache_write_tokens": 360067,
+      "cache_write_1h_tokens": 360067
+    }
+  ],
+  "estimate": {
+    "source": "claude-code cost-state",
+    "from": "2026-11-05T11:10:40Z",
+    "covers_session": true,
+    "api_ms": 862768,
+    "tool_ms": 1109471,
+    "cost_usd": [
+      {
+        "model": "claude-haiku-5-5",
+        "usd": 0.025619
+      },
+      {
+        "model": "claude-opus-5-5",
+        "usd": 6.76097
+      }
+    ]
+  },
+  "commits": [
+    "solidcraft@bd82376d15b24acdb2840485510580eab5ff3170",
+    "774091aa64210d5ae060ab3baa493f407c9114bd"
+  ]
+}
