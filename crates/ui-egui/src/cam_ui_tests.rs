@@ -114,7 +114,7 @@ fn selected_faces_become_the_operation_s_geometry() {
     h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
     define_tool(&mut h);
     fill(&mut h, "cam.setup.create", |_| {});
-    let top = solidcraft_engine::geom::Vec3::new(30.0, 20.0, 10.0);
+    let top = solidcore_record::Vec3::new(30.0, 20.0, 10.0);
     h.app.session.selection = crate::dialogs::face_sel(&h.app.session, top).into_iter().collect();
     assert_eq!(h.app.session.selection.len(), 1);
     // Nothing is typed: the outline and both heights come from the face and its body.
@@ -143,7 +143,7 @@ fn a_3d_form_gives_selected_faces_their_roles() {
     define_tool(&mut h);
     fill(&mut h, "cam.setup.create", |_| {});
     h.app.start("cam.op.parallel3d");
-    let top = solidcraft_engine::geom::Vec3::new(30.0, 20.0, 10.0);
+    let top = solidcore_record::Vec3::new(30.0, 20.0, 10.0);
     h.app.session.selection = crate::dialogs::face_sel(&h.app.session, top).into_iter().collect();
     h.frames(2);
     assert!(h.widget("none: every face is machined").is_some());
@@ -216,7 +216,7 @@ fn simulate_reports_in_the_window_until_the_design_changes() {
     h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
     define_tool(&mut h);
     fill(&mut h, "cam.setup.create", |_| {});
-    let top = solidcraft_engine::geom::Vec3::new(30.0, 20.0, 10.0);
+    let top = solidcore_record::Vec3::new(30.0, 20.0, 10.0);
     h.app.session.selection = crate::dialogs::face_sel(&h.app.session, top).into_iter().collect();
     fill(&mut h, "cam.op.contour", |_| {});
     h.frames(2);
@@ -739,7 +739,7 @@ fn panels_move_by_their_headers_and_close_from_their_footers() {
     h.app.manufacture.open = true;
     h.app.manufacture.tools_open = true;
     h.frames(6);
-    let rect = |h: &Harness, id: &str| h.ctx.memory(|m| m.area_rect(egui::Id::new(id))).expect("drawn");
+    let rect = |h: &Harness, id: &str| h.ctx.memory(|m| m.area_rect(egui::Id::unique(id))).expect("drawn");
     let (panel, tools) = (rect(&h, "sc_cam_window"), rect(&h, "sc_cam_tools"));
     assert!(tools.right() <= panel.left(), "the Tool Library docks left of the Manufacture panel: {tools:?} {panel:?}");
 
@@ -955,7 +955,7 @@ fn heights_are_taken_from_the_selection() {
     h.frames(2);
     assert!(h.widget("Bottom from the selection").is_some(), "the button is there, off while nothing is selected");
     // A corner at the plate's foot: Bottom takes its height.
-    let corner = solidcraft_engine::geom::Vec3::new(0.0, 0.0, -10.0);
+    let corner = solidcore_record::Vec3::new(0.0, 0.0, -10.0);
     h.app.session.selection = vec![solidcraft_engine::Sel::Vertex { body: "Body1".into(), point: corner }];
     h.frames(2);
     h.step(&json!({"widget": "Bottom from the selection"})).unwrap();
@@ -1097,7 +1097,7 @@ fn an_operation_on_picked_faces_opens_again_with_them() {
     h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
     define_tool(&mut h);
     fill(&mut h, "cam.setup.create", |_| {});
-    let top = solidcraft_engine::geom::Vec3::new(30.0, 20.0, 10.0);
+    let top = solidcore_record::Vec3::new(30.0, 20.0, 10.0);
     h.app.session.selection = crate::dialogs::face_sel(&h.app.session, top).into_iter().collect();
     fill(&mut h, "cam.op.contour", |_| {});
     h.app.session.selection.clear();
@@ -1381,7 +1381,7 @@ fn a_simulated_program_plays_with_the_tool_cutting_the_stock() {
     h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
     define_tool(&mut h);
     fill(&mut h, "cam.setup.create", |_| {});
-    let top = solidcraft_engine::geom::Vec3::new(30.0, 20.0, 10.0);
+    let top = solidcore_record::Vec3::new(30.0, 20.0, 10.0);
     h.app.session.selection = crate::dialogs::face_sel(&h.app.session, top).into_iter().collect();
     fill(&mut h, "cam.op.contour", |f| {
         let Form::Op(op) = f else { panic!("not an operation form") };

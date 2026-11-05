@@ -15,7 +15,8 @@ use std::collections::VecDeque;
 use std::f64::consts::{PI, TAU};
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Region2, Vec2, Vec3};
+use solidcore_record::{Region2, Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use crate::offset::{Shape, reversed};
 use crate::ops::{Builder, Cut};

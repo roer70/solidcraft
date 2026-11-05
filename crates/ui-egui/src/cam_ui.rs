@@ -8,7 +8,8 @@
 use crate::ui_kit::{self, Button, StatusTone, button};
 use egui::{RichText, Stroke};
 use serde_json::{Value, json};
-use solidcraft_engine::geom::Vec3;
+use solidcore_record::Vec3;
+use solidcraft_engine::geom::prelude::*;
 
 use crate::SolveApp;
 use crate::i18n::{format as tf, tr_manufacture as tm};
@@ -1020,7 +1021,7 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
                 .unwrap_or_default()
         };
         let faces = selected_faces(app);
-        let has_bodies = !app.session.world_state().bodies.is_empty();
+        let has_bodies = app.session.world_state().is_ok_and(|s| !s.bodies.is_empty());
         Form::Op(Box::new(OpForm {
             kind,
             filled_for: String::new(),
@@ -1130,7 +1131,7 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
             name: String::new(),
             axis: 0,
             // With a body to put a box round: the stock's top at its lowest X and Y.
-            origin: if app.session.world_state().bodies.is_empty() { 2 } else { 0 },
+            origin: if app.session.world_state().map_or(true, |s| s.bodies.is_empty()) { 2 } else { 0 },
             anchors: [0, 0, 2],
             point: ["0".into(), "0".into(), "0".into()],
             edge: None,
@@ -2919,7 +2920,7 @@ fn draw_face_roles(app: &SolveApp, painter: &egui::Painter, proj: &Proj, roles: 
         return;
     }
     let t = Tokens::get();
-    let state = app.session.world_state();
+    let state = app.session.world_state().unwrap_or_default();
     let mut mesh = egui::Mesh::default();
     for r in roles {
         let colour = match r.role {
@@ -2929,7 +2930,7 @@ fn draw_face_roles(app: &SolveApp, painter: &egui::Painter, proj: &Proj, roles: 
         }
         .gamma_multiply(0.45);
         let Some(body) = state.bodies.iter().find(|b| b.name == r.body) else { continue };
-        let Some((index, _, _)) = naming::face_name_at_body(body, r.at).and_then(|name| naming::face_on_body(body, &name, r.at)) else { continue };
+        let Some((index, _)) = naming::face_name_at_body(body, r.at).and_then(|name| naming::face_on_body(body, &name, r.at)) else { continue };
         let m = body.mesh();
         for (k, tri) in m.triangles.iter().enumerate() {
             if m.tri_face.get(k).map(|f| *f as usize) != Some(index) {
@@ -3260,7 +3261,7 @@ const LABEL_COLUMN: &str = "sc_cam_label_column";
 /// A line in a form's control column under the row before it, with no label of its own (a
 /// button that fills that row in).
 fn beneath<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let indent = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::new(LABEL_COLUMN))).unwrap_or(0.0);
+    let indent = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::unique(LABEL_COLUMN))).unwrap_or(0.0);
     ui.horizontal(|ui| {
         ui.add_space((indent - ui.spacing().item_spacing.x).max(0.0));
         add(ui)
@@ -3961,7 +3962,7 @@ fn tool_assistant(ui: &mut egui::Ui, f: &mut ToolForm, need: &[Need], materials:
                     tool_picture(&mut inside, &shape, None, egui::vec2(96.0, 96.0), false);
                     // Not selectable: a click on the name is a click on the tile.
                     inside.add(egui::Label::new(tm(name)).selectable(false));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tm(name)));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tm(name)));
                     if r.clicked() {
                         f.kind = k;
                         f.step = 1;
@@ -4398,7 +4399,7 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
             let (mut rows, mut left) = (Vec::new(), 0.0);
             // The picture takes the start of the label column; the rows' own, narrower label
             // column ends where the form's does, so their boxes line up with the other rows'.
-            let indent = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::new(LABEL_COLUMN))).unwrap_or(0.0);
+            let indent = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::unique(LABEL_COLUMN))).unwrap_or(0.0);
             ui.horizontal_top(|ui| {
                 left = ui.cursor().left();
                 ui.allocate_exact_size(egui::vec2(SCHEME_W, 0.0), egui::Sense::hover());
@@ -4749,7 +4750,7 @@ fn form_card(
     let frame = crate::ui_kit::Panel::feature_frame(ctx, layout, side);
     // Two cards wide: the rows, the heights picture and the tool's picture need the room.
     let width = (t.form_card_width * 2.0).min(bounds.width());
-    let panel = crate::ui_kit::Panel::new(&title, egui::Id::new(FORM_CARD), anchor, bounds, side, frame)
+    let panel = crate::ui_kit::Panel::new(&title, egui::Id::unique(FORM_CARD), anchor, bounds, side, frame)
         .width(width)
         .reset_scroll(cam.form_seen != Some(heading));
     cam.form_seen = Some(heading);
@@ -4795,7 +4796,7 @@ fn form_body(ui: &mut egui::Ui, cam: &mut CamUi, selected: &[(String, Vec3)], li
     let heights = ["Clearance", "Retract", "Top", "Bottom"].map(|l| crate::ui_kit::ContentWidth::label(ui, tm(l))).into_iter().fold(0.0, f32::max);
     let kit = (t.form_label_width + t.space_24 + t.space_10) * LABEL_GROWTH;
     let column = kit.max(SCHEME_W + ui.spacing().item_spacing.x + heights + t.space_4).min(ui.available_width() * 0.5);
-    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(LABEL_COLUMN), column + t.space_14));
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(LABEL_COLUMN), column + t.space_14));
     crate::ui_kit::settings_form(ui, column, |ui| form_ui(ui, form, selected, lists, need));
     let wanted = need_text(need);
     if matches!(form, Form::Op(_)) {
@@ -4871,7 +4872,7 @@ fn overview_card(
     let anchor = crate::frame::offset_anchor(dock.anchor, moved, dock.bounds, side);
     let frame = crate::ui_kit::Panel::feature_frame(ctx, dock.layout, side);
     let width = (t.form_card_width * 2.0).min(dock.bounds.width());
-    let panel = crate::ui_kit::Panel::new(title, egui::Id::new(id), anchor, dock.bounds, side, frame).width(width).actions("", "Close");
+    let panel = crate::ui_kit::Panel::new(title, egui::Id::unique(id), anchor, dock.bounds, side, frame).width(width).actions("", "Close");
     let mut answer = (false, crate::ui_kit::Action::None);
     let response = panel.window(ctx).show(ctx, |ui| {
         let options = crate::ui_kit::FeatureOptions { icon, title, drag_key, moved, docked: dock.anchor, apply_label: None };
@@ -5750,7 +5751,7 @@ pub fn browser_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize) {
     }
     let r = draw_row(
         ui,
-        ui.id().with(key),
+        ui.scope_id().with(key),
         &Row { depth, fold: Some(open), eye: Some(shown), icon: "folder", label: "Manufacture", dim: !shown, ..Default::default() },
     );
     if r.eye {
@@ -5776,7 +5777,7 @@ pub fn browser_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize) {
         let total = if ops.is_empty() { String::new() } else { minutes_text(total) };
         let r = draw_row(
             ui,
-            ui.id().with(("cam_setup", id)),
+            ui.scope_id().with(("cam_setup", id)),
             &Row {
                 depth: depth + 1,
                 fold: (!ops.is_empty()).then_some(sopen),
@@ -5832,7 +5833,7 @@ pub fn browser_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize) {
             };
             let r = draw_row(
                 ui,
-                ui.id().with(("cam_op", id, op_id)),
+                ui.scope_id().with(("cam_op", id, op_id)),
                 &Row {
                     depth: depth + 2,
                     eye: Some(!app.manufacture.hidden.contains(&op_id)),
@@ -5870,7 +5871,7 @@ pub fn browser_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize) {
                 }
                 let after = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.hover_pos())).is_some_and(|p| p.y > resp.rect.center().y);
                 let mark = if after { crate::browser::DropMark::Below } else { crate::browser::DropMark::Above };
-                if let Some(d) = crate::browser::drop_target(ui, resp, |d: &OpDrag| d.setup == id && d.op != op_id, mark) {
+                if let Some(d) = crate::browser::drop_target_of(ui, resp, |d: &OpDrag| d.setup == id && d.op != op_id, mark) {
                     let to = if d.at < at { at - usize::from(!after) } else { at + usize::from(after) };
                     asked.run.push(("cam.op.move", json!({ "setup": id, "op": d.op, "to": to })));
                 }

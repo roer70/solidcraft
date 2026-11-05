@@ -19,7 +19,7 @@ pub(super) fn post_confirmation(app: &mut SolveApp, ctx: &egui::Context) {
     }
     let message = lines.join("\n\n");
     let (closed, action) = ui_kit::Confirm::new(
-        egui::Id::new("sc_cam_post_confirm"),
+        egui::Id::unique("sc_cam_post_confirm"),
         "status_warning",
         tm(if pending.collisions > 0 { "Rapid moves run into material" } else { "The tool runs into a clamp" }),
     )

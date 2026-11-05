@@ -9,7 +9,8 @@
 //! within its radius, which on a triangle is a corner inside the circle, where an edge crosses
 //! it, or the face's own highest point on the circle.
 
-use solidcraft_geom::{Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 /// Most triangles kept for dropping onto.
 const MAX_TRIANGLES: usize = 4_000_000;

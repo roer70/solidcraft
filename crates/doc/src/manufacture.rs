@@ -3,8 +3,8 @@
 //! follow parameter changes.
 
 use serde::{Deserialize, Serialize};
+use solidcore_record::Vec3;
 use solidcraft_cam::{Side, Tool};
-use solidcraft_geom::Vec3;
 
 use crate::{Expr, ProfileSel};
 

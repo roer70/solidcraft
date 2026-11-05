@@ -9,7 +9,8 @@
 //! move passes nearest (a few positions within the tool's radius either way).
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use crate::path::Toolpath;
 use crate::tool::{Tool, ToolKind};

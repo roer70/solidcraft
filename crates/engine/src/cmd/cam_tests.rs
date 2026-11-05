@@ -30,7 +30,7 @@ fn pocket_op() -> Value {
 }
 
 /// The cutting moves of a program, read back from its text.
-fn cuts(gcode: &str) -> Vec<solidcraft_geom::Vec3> {
+fn cuts(gcode: &str) -> Vec<solidcore_record::Vec3> {
     let moves = solidcraft_cam::parse(gcode).unwrap();
     Toolpath { moves }.points(0.01).into_iter().filter(|(_, cutting)| *cutting).map(|(p, _)| p).collect()
 }
@@ -67,7 +67,7 @@ fn pocket_from_a_sketch_to_gcode() {
     // The tool ramps in: straight-down feeds only go through air, to the top of the material
     // and then to the depth the pass before cleared, never to a new depth.
     let moves = solidcraft_cam::parse(gcode).unwrap();
-    let mut at = solidcraft_geom::Vec3::ZERO;
+    let mut at = solidcore_record::Vec3::ZERO;
     for m in &moves {
         let Some(to) = m.target() else { continue };
         if matches!(m, Move::Feed { .. }) && to.x == at.x && to.y == at.y {
@@ -1022,7 +1022,7 @@ fn a_hole_s_wall_gives_its_circle_and_its_depth() {
 fn a_selection_s_heights_are_read_in_the_setup() {
     let mut s = machined_plate();
     let heights = |s: &Session, sel: Vec<crate::Sel>| crate::cam_selection_heights(s, &json!({}), &sel).unwrap();
-    let v = |x: f64, y: f64, z: f64| crate::Sel::Vertex { body: "Body1".into(), point: solidcraft_geom::Vec3::new(x, y, z) };
+    let v = |x: f64, y: f64, z: f64| crate::Sel::Vertex { body: "Body1".into(), point: solidcore_record::Vec3::new(x, y, z) };
     assert_eq!(heights(&s, vec![v(0.0, 0.0, -10.0)]), Some((-10.0, -10.0)));
     assert_eq!(heights(&s, vec![v(0.0, 0.0, -10.0), v(10.0, 10.0, -4.0)]), Some((-10.0, -4.0)));
     // A whole body reaches from its foot to its top; things that are not geometry give nothing.

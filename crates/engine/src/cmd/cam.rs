@@ -3,6 +3,7 @@
 //! profiles are; toolpaths are never stored, so they follow the design.
 
 use serde_json::{Value, json};
+use solidcore_record::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use solidcraft_cam::{
     self as cam, AdaptiveParams, BoreParams, ChamferParams, ContourParams, Cut, CuttingData, DrillParams, Feeds, Heights, PocketParams, Post, Side,
     Tool, ToolKind, Toolpath, VCarveParams,
@@ -14,7 +15,7 @@ use solidcraft_doc::manufacture::{
     StockDef, StockShape, TabsDef,
 };
 use solidcraft_doc::sketch::{LinkGeom, LinkKind};
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, expr, num, req_expr, str_, vec3};
@@ -2066,7 +2067,7 @@ fn op_part(s: &Session, at: &Resolved, op: &CamOperation, allowance: Option<f64>
             .iter()
             .filter(|r| r.face.body == body.name)
             .filter_map(|r| {
-                let (index, _, _) = solidcraft_doc::naming::face_on_body(body, &r.face.name, r.face.at)?;
+                let (index, _) = solidcraft_doc::naming::face_on_body(body, &r.face.name, r.face.at)?;
                 let off = match r.role {
                     Role::Ignore => None,
                     Role::Avoid { clearance } => Some(clearance),

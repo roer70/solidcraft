@@ -10,7 +10,8 @@
 //! is near, else over the clearance height. Points on a straight run are left out where the line
 //! between the others stays within the tolerance above them, never below.
 
-use solidcraft_geom::{Region2, Vec2, Vec3};
+use solidcore_record::{Region2, Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use crate::drop::BallDrop;
 use crate::offset::Shape;

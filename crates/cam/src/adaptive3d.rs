@@ -16,7 +16,8 @@
 //! as wide as the tool reaches within a quarter of its round's radius of the level, so the cusps
 //! it leaves stay that low.
 
-use solidcraft_geom::{Region2, Vec2, Vec3};
+use solidcore_record::{Region2, Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 
 use crate::adaptive::{self, AdaptiveParams, Entry, Grid};
 use crate::offset::Shape;
