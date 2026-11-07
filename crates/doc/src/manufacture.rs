@@ -13,16 +13,194 @@ pub struct Manufacture {
     /// The tool library, by tool number.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<Tool>,
+    /// The machines the setups run on, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setups: Vec<Setup>,
 }
 
+/// Most machines a design keeps.
+pub const MAX_MACHINES: usize = 256;
+/// Most axes in a machine's chain.
+pub const MAX_MACHINE_AXES: usize = 9;
+/// Longest machine name, in bytes.
+pub const MAX_MACHINE_NAME: usize = 200;
+
 impl Manufacture {
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty() && self.setups.is_empty()
+        self.tools.is_empty() && self.machines.is_empty() && self.setups.is_empty()
     }
     pub fn tool(&self, number: u32) -> Option<&Tool> {
         self.tools.iter().find(|t| t.number == number)
+    }
+    pub fn machine(&self, name: &str) -> Option<&Machine> {
+        self.machines.iter().find(|m| m.name == name)
+    }
+
+    /// Checks the machines and the setups' references to them: every machine is sound, no two
+    /// share a name, and every setup's machine is one of them. A design from elsewhere is hostile.
+    pub fn check_machines(&self) -> std::result::Result<(), String> {
+        if self.machines.len() > MAX_MACHINES {
+            return Err(format!("more than {MAX_MACHINES} machines"));
+        }
+        for (i, machine) in self.machines.iter().enumerate() {
+            machine.check()?;
+            if self.machines[..i].iter().any(|m| m.name == machine.name) {
+                return Err(format!("two machines are named \"{}\"", machine.name));
+            }
+        }
+        for setup in &self.setups {
+            if let Some(name) = &setup.machine
+                && self.machine(name).is_none()
+            {
+                return Err(format!("setup \"{}\" runs on machine \"{name}\", which the design does not have", setup.name));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A machine tool: its axes as a chain from the table to the tool, and the post its programs
+/// are written with unless a setup names its own. A lathe spindle will be another optional field
+/// here; older designs then load without it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Machine {
+    pub name: String,
+    /// The axes in order from the table to the tool.
+    pub axes: Vec<MachineAxis>,
+    /// The built-in post processor a setup on this machine takes when it names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<String>,
+}
+
+impl Machine {
+    /// The axis with this name.
+    pub fn axis(&self, name: AxisName) -> Option<&MachineAxis> {
+        self.axes.iter().find(|a| a.name() == name)
+    }
+
+    /// Checks that the machine can be used: a name, at least one axis and no more than
+    /// [`MAX_MACHINE_AXES`], no axis named twice, and every axis sound.
+    pub fn check(&self) -> std::result::Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("a machine has no name".into());
+        }
+        if self.name.len() > MAX_MACHINE_NAME {
+            return Err(format!("a machine name is longer than {MAX_MACHINE_NAME} bytes"));
+        }
+        let name = &self.name;
+        if self.axes.is_empty() {
+            return Err(format!("machine \"{name}\" has no axes"));
+        }
+        if self.axes.len() > MAX_MACHINE_AXES {
+            return Err(format!("machine \"{name}\" has more than {MAX_MACHINE_AXES} axes"));
+        }
+        for (i, axis) in self.axes.iter().enumerate() {
+            axis.check().map_err(|e| format!("machine \"{name}\", axis {}: {e}", axis.name().label()))?;
+            if self.axes[..i].iter().any(|a| a.name() == axis.name()) {
+                return Err(format!("machine \"{name}\" has two {} axes", axis.name().label()));
+            }
+        }
+        if self.post.as_deref().is_some_and(|p| p.trim().is_empty()) {
+            return Err(format!("machine \"{name}\" has an empty post"));
+        }
+        Ok(())
+    }
+}
+
+/// The name of a machine axis: X, Y and Z move along, A, B and C turn about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AxisName {
+    X,
+    Y,
+    Z,
+    A,
+    B,
+    C,
+}
+
+impl AxisName {
+    pub fn label(self) -> &'static str {
+        match self {
+            AxisName::X => "X",
+            AxisName::Y => "Y",
+            AxisName::Z => "Z",
+            AxisName::A => "A",
+            AxisName::B => "B",
+            AxisName::C => "C",
+        }
+    }
+    /// Whether the axis turns (A, B, C) rather than moves along (X, Y, Z).
+    pub fn is_rotary(self) -> bool {
+        matches!(self, AxisName::A | AxisName::B | AxisName::C)
+    }
+}
+
+/// What carries a rotary axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Carrier {
+    /// The table: the part turns.
+    Table,
+    /// The head: the tool turns.
+    Head,
+}
+
+/// One axis of a machine.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MachineAxis {
+    /// Moves along its name's direction from `min` to `max` (mm, machine coordinates).
+    Linear { name: AxisName, min: f64, max: f64 },
+    /// Turns about `axis` (a direction in machine coordinates) through `pivot` (mm), carried by
+    /// the table or the head, between `limits` (degrees) or round and round without them.
+    Rotary {
+        name: AxisName,
+        axis: Vec3,
+        on: Carrier,
+        pivot: Vec3,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limits: Option<[f64; 2]>,
+    },
+}
+
+impl MachineAxis {
+    pub fn name(&self) -> AxisName {
+        match self {
+            MachineAxis::Linear { name, .. } | MachineAxis::Rotary { name, .. } => *name,
+        }
+    }
+
+    fn check(&self) -> std::result::Result<(), String> {
+        match self {
+            MachineAxis::Linear { name, min, max } => {
+                if name.is_rotary() {
+                    return Err("a linear axis must be X, Y or Z".into());
+                }
+                if !min.is_finite() || !max.is_finite() || min >= max {
+                    return Err("its travel needs finite limits, the lower below the upper".into());
+                }
+            }
+            MachineAxis::Rotary { name, axis, pivot, limits, .. } => {
+                if !name.is_rotary() {
+                    return Err("a rotary axis must be A, B or C".into());
+                }
+                let length = (axis.x * axis.x + axis.y * axis.y + axis.z * axis.z).sqrt();
+                if !axis.is_finite() || !length.is_finite() || length < 1e-9 {
+                    return Err("it needs a direction to turn about".into());
+                }
+                if !pivot.is_finite() {
+                    return Err("its pivot must be a finite point".into());
+                }
+                if let Some([low, high]) = limits
+                    && (!low.is_finite() || !high.is_finite() || low >= high)
+                {
+                    return Err("its limits must be finite, the lower below the upper".into());
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -47,6 +225,10 @@ pub struct Setup {
     pub material: Option<String>,
     /// The built-in post processor programs are written with.
     pub post: String,
+    /// The machine it runs on, by name in [`Manufacture::machines`] (none: a generic three-axis
+    /// mill, as before machines).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// The work offset its programs run in: 54 to 59 (`G54` to `G59`).
     #[serde(default = "g54", skip_serializing_if = "is_g54")]
     pub work_offset: u8,

@@ -691,6 +691,7 @@ pub fn read(s: &str) -> Result<Document> {
     DESIGN.upgrade(&mut v, version, applied.as_deref())?;
     let mut d: Document = serde_json::from_value(v).map_err(|e| DocError::Invalid(format!("design file: {e}")))?;
     check_typed_numbers(&d)?;
+    d.manufacture.check_machines().map_err(|e| DocError::Invalid(format!("damaged design: {e}")))?;
     let mut legacy_by_feature = std::collections::BTreeMap::<usize, Vec<usize>>::new();
     for (feature, wire) in legacy_wires {
         legacy_by_feature.entry(feature).or_default().push(wire);
@@ -2609,5 +2610,84 @@ mod tests {
         assert_eq!(serde_json::to_value(&k).unwrap(), new);
         let parallel: SweepOrientation = serde_json::from_value(serde_json::json!("parallel")).unwrap();
         assert_eq!(parallel, SweepOrientation::Parallel);
+    }
+
+    /// A design file with this `manufacture`.
+    fn cam_design(manufacture: Value) -> String {
+        let mut file: Value = serde_json::from_str(&Document::new("cam").to_json()).unwrap();
+        file["manufacture"] = manufacture;
+        file.to_string()
+    }
+
+    fn cam_setup(machine: Option<&str>) -> Value {
+        serde_json::json!({"id": 1, "name": "Top", "origin": {"type": "point", "at": [0.0, 0.0, 0.0]}, "post": "grbl", "machine": machine})
+    }
+
+    /// A four-axis router: A on the table about X, then X, Y and Z.
+    fn four_axis_machine() -> Value {
+        serde_json::json!({"name": "FlexiHAL", "post": "grbl", "axes": [
+            {"type": "rotary", "name": "A", "axis": [1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, 0.0, 40.0]},
+            {"type": "linear", "name": "X", "min": 0.0, "max": 300.0},
+            {"type": "linear", "name": "Y", "min": 0.0, "max": 200.0},
+            {"type": "linear", "name": "Z", "min": -90.0, "max": 0.0},
+        ]})
+    }
+
+    /// A design without machines saves exactly as it did before machines: no new keys, and
+    /// loading and saving it again changes nothing.
+    #[test]
+    fn a_design_without_machines_saves_as_before() {
+        let saved = Document::from_json(&cam_design(serde_json::json!({"setups": [cam_setup(None)]}))).unwrap().to_json();
+        assert!(!saved.contains("\"machine"), "{saved}");
+        assert_eq!(Document::from_json(&saved).unwrap().to_json(), saved);
+    }
+
+    /// A machine with X, Y, Z and A, and a setup on it, load back as they were saved.
+    #[test]
+    fn a_machine_and_its_setup_save_and_load_back() {
+        let mut machine = four_axis_machine();
+        machine["axes"][0]["limits"] = serde_json::json!([-360.0, 360.0]);
+        let file = cam_design(serde_json::json!({"machines": [machine], "setups": [cam_setup(Some("FlexiHAL"))]}));
+        let first = Document::from_json(&file).unwrap();
+        let m = &first.manufacture;
+        let flexihal = m.machine("FlexiHAL").unwrap();
+        assert_eq!(flexihal.axes.len(), 4);
+        assert_eq!(flexihal.post.as_deref(), Some("grbl"));
+        assert!(matches!(
+            flexihal.axis(crate::manufacture::AxisName::A),
+            Some(crate::manufacture::MachineAxis::Rotary { on: crate::manufacture::Carrier::Table, limits: Some([-360.0, 360.0]), .. })
+        ));
+        assert_eq!(m.setups[0].machine.as_deref(), Some("FlexiHAL"));
+        let again = Document::from_json(&first.to_json()).unwrap();
+        assert_eq!(again.manufacture, first.manufacture);
+        assert_eq!(again.to_json(), first.to_json());
+    }
+
+    /// A damaged machine, or a setup naming a machine the design lacks, is refused as an error.
+    #[test]
+    fn damaged_machines_are_refused_not_panicked_on() {
+        let damaged: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+            ("no axes", Box::new(|m| m["machines"][0]["axes"] = serde_json::json!([]))),
+            ("no name", Box::new(|m| m["machines"][0]["name"] = serde_json::json!(" "))),
+            ("empty post", Box::new(|m| m["machines"][0]["post"] = serde_json::json!(""))),
+            ("two X axes", Box::new(|m| m["machines"][0]["axes"][2]["name"] = serde_json::json!("X"))),
+            ("linear A", Box::new(|m| m["machines"][0]["axes"][1]["name"] = serde_json::json!("A"))),
+            ("rotary X", Box::new(|m| m["machines"][0]["axes"][0]["name"] = serde_json::json!("X"))),
+            ("unknown axis name", Box::new(|m| m["machines"][0]["axes"][1]["name"] = serde_json::json!("U"))),
+            ("unknown axis type", Box::new(|m| m["machines"][0]["axes"][1]["type"] = serde_json::json!("spindle"))),
+            ("travel backwards", Box::new(|m| m["machines"][0]["axes"][1]["max"] = serde_json::json!(-1.0))),
+            ("no travel", Box::new(|m| m["machines"][0]["axes"][1]["max"] = serde_json::json!(0.0))),
+            ("no direction", Box::new(|m| m["machines"][0]["axes"][0]["axis"] = serde_json::json!([0.0, 0.0, 0.0]))),
+            ("limits backwards", Box::new(|m| m["machines"][0]["axes"][0]["limits"] = serde_json::json!([90.0, -90.0]))),
+            ("too many axes", Box::new(|m| m["machines"][0]["axes"] = Value::Array(vec![four_axis_machine()["axes"][1].clone(); 10]))),
+            ("two machines one name", Box::new(|m| m["machines"] = serde_json::json!([four_axis_machine(), four_axis_machine()]))),
+            ("unknown machine", Box::new(|m| m["setups"][0]["machine"] = serde_json::json!("Haas"))),
+            ("machine without machines", Box::new(|m| m["machines"] = serde_json::json!([]))),
+        ];
+        for (what, damage) in damaged {
+            let mut manufacture = serde_json::json!({"machines": [four_axis_machine()], "setups": [cam_setup(Some("FlexiHAL"))]});
+            damage(&mut manufacture);
+            assert!(Document::from_json(&cam_design(manufacture)).is_err(), "{what} was accepted");
+        }
     }
 }

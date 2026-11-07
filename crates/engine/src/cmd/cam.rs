@@ -1108,6 +1108,7 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         fixtures,
         material,
         post,
+        machine: None,
         work_offset,
         stock_from,
         clamps,
