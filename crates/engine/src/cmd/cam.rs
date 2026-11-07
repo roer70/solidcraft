@@ -1605,7 +1605,8 @@ impl Frame {
 
 /// Work X and Y for a tool axis. Along a world axis they are world axes too: for +Z, world X
 /// and Y; for −Z, X and −Y; for ±X, ±Y and Z; for +Y, X and −Z; for −Y, X and Z. For any other
-/// direction X is level (square to world Z).
+/// direction X is level (square to world Z). An axis within a hair of a world axis takes that
+/// axis's X, made square to the tool axis.
 fn axes(axis: Vec3) -> Option<(Vec3, Vec3, Vec3)> {
     let z = axis.normalized().filter(|z| z.is_finite())?;
     let x = if z.z.abs() > 1.0 - 1e-9 || z.y.abs() > 1.0 - 1e-9 {
@@ -1613,8 +1614,9 @@ fn axes(axis: Vec3) -> Option<(Vec3, Vec3, Vec3)> {
     } else if z.x.abs() > 1.0 - 1e-9 {
         Vec3::new(0.0, z.x.signum(), 0.0)
     } else {
-        Vec3::new(0.0, 0.0, 1.0).cross(z).normalized()?
+        Vec3::new(0.0, 0.0, 1.0).cross(z)
     };
+    let x = (x - z * x.dot(z)).normalized().filter(|x| x.is_finite())?;
     Some((x, z.cross(x), z))
 }
 

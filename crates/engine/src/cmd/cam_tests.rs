@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
+use solidcore_record::Vec3;
 use solidcraft_cam::{Move, Toolpath};
+use solidcraft_geom::prelude::*;
 
 use crate::Session;
 
@@ -2538,6 +2540,32 @@ fn rest_finishing_goes_only_where_the_larger_ball_left_material() {
     // Switched off again it finishes it all.
     run(&mut s, "cam.op.edit", json!({"op": rest["operation"], "rest": false}));
     assert!(matches!(&s.doc.manufacture.setups[0].operations[2].kind, solidcraft_doc::manufacture::CamOperationKind::Parallel3d { rest: false, .. }));
+}
+
+/// A tool axis a hair off vertical gets a work X square to it, so moving along the tool axis
+/// leaves work X alone; the six world axes keep their exact frames.
+#[test]
+fn work_axes_are_square_for_an_axis_a_hair_off_a_world_axis() {
+    for axis in [Vec3::new(0.00004, 0.0, 1.0), Vec3::new(1.0, 0.00004, 0.0), Vec3::new(0.0, -1.0, 0.00004)] {
+        let (x, y, z) = super::axes(axis).unwrap();
+        for (a, b) in [(x, y), (y, z), (z, x)] {
+            close(a.dot(b), 0.0, 1e-12);
+        }
+        close(x.len(), 1.0, 1e-12);
+        close((z * 100.0).dot(x), 0.0, 1e-9);
+    }
+    let unit = |x: f64, y: f64, z: f64| Vec3::new(x, y, z);
+    for (axis, want_x, want_y) in [
+        (unit(0.0, 0.0, 1.0), unit(1.0, 0.0, 0.0), unit(0.0, 1.0, 0.0)),
+        (unit(0.0, 0.0, -1.0), unit(1.0, 0.0, 0.0), unit(0.0, -1.0, 0.0)),
+        (unit(1.0, 0.0, 0.0), unit(0.0, 1.0, 0.0), unit(0.0, 0.0, 1.0)),
+        (unit(-1.0, 0.0, 0.0), unit(0.0, -1.0, 0.0), unit(0.0, 0.0, 1.0)),
+        (unit(0.0, 1.0, 0.0), unit(1.0, 0.0, 0.0), unit(0.0, 0.0, -1.0)),
+        (unit(0.0, -1.0, 0.0), unit(1.0, 0.0, 0.0), unit(0.0, 0.0, 1.0)),
+    ] {
+        let (x, y, _) = super::axes(axis).unwrap();
+        assert_eq!((x, y), (want_x, want_y), "axis {axis:?}");
+    }
 }
 
 /// The FlexiHAL example design: a script that adds the machine and a setup on it.
