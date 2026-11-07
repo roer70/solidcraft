@@ -1,0 +1,26 @@
+{
+  "en": {
+    "cmd.cam_machine_add": "Add Machine",
+    "cmd.cam_machine_edit": "Edit Machine",
+    "cmd.cam_machine_list": "List Machines",
+    "cmd.cam_machine_remove": "Remove Machine"
+  },
+  "de": {
+    "cmd.cam_machine_add": "Maschine hinzufügen",
+    "cmd.cam_machine_edit": "Maschine bearbeiten",
+    "cmd.cam_machine_list": "Maschinen auflisten",
+    "cmd.cam_machine_remove": "Maschine entfernen"
+  },
+  "ja": {
+    "cmd.cam_machine_add": "機械を追加",
+    "cmd.cam_machine_edit": "機械を編集",
+    "cmd.cam_machine_list": "機械の一覧",
+    "cmd.cam_machine_remove": "機械を削除"
+  },
+  "zh": {
+    "cmd.cam_machine_add": "添加机床",
+    "cmd.cam_machine_edit": "编辑机床",
+    "cmd.cam_machine_list": "列出机床",
+    "cmd.cam_machine_remove": "删除机床"
+  }
+}

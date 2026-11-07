@@ -19,7 +19,17 @@ use solidcraft_geom::prelude::*;
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, expr, num, req_expr, str_, vec3};
+use crate::schema::cam::{
+    MachineAddParams, MachineEditParams, MachineEntry, MachineList, MachineListParams, MachineRemoveParams, MachineRemoved, MachineResult,
+};
+use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session, toollib};
+use solidcraft_doc::manufacture::{MAX_MACHINES, Machine};
+
+const MACHINE_ADD_CONTRACT: TypedContract<MachineAddParams> = TypedContract::new();
+const MACHINE_EDIT_CONTRACT: TypedContract<MachineEditParams> = TypedContract::new();
+const MACHINE_REMOVE_CONTRACT: TypedContract<MachineRemoveParams> = TypedContract::new();
+const MACHINE_LIST_CONTRACT: TypedContract<MachineListParams> = TypedContract::new();
 
 const MAX_TOOLS: usize = toollib::MAX_TOOLS;
 const MAX_SETUPS: usize = 100;
@@ -60,7 +70,8 @@ const SETUP_DOC: &str = "name?; axis?: +x|-x|+y|-y|+z|-z or [x, y, z], the direc
      or a vertex, body?, on?: vertex|middle|center (the end nearest the point, halfway along, or the centre of its circle; default: vertex at an \
      end, else center on a round edge, else middle), z?: point | {of?: stock|part, z?: min|center|max} (default: the stock's top)}: across the \
      tool axis at that point of the edge, which it follows as the design changes; post?: rs274|grbl|grblhal|lnc|lnc_atc (default \
-     rs274); material?: what the stock is made of (operations take their tool's cutting data for it; null: none); work_offset?: G54 to G59 \
+     rs274, or the machine's); machine?: the machine it runs on, by name (cam.machine.add; null: none, a generic three-axis mill); \
+     material?: what the stock is made of (operations take their tool's cutting data for it; null: none); work_offset?: G54 to G59 \
      (or 54 to 59; default G54), the work offset its programs run in; stock_from?: an earlier setup (id or name; null: none) whose result \
      is the stock, its tool axis the same or turned over (the part turned over about the world X axis for a setup from -z); x_axis?: the setup's X direction across its \
      axis, as axis is given (default: worked out from the axis; from -z, +x turns the part about X and -x about Y); clamps?: \
@@ -110,11 +121,36 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("cam.tool.import", "Import Tools", tool_import).icon("import")
         .params("path: a tool library written by cam.tool.export; replace?: bool (default false: tools whose number is taken are skipped) → added, replaced, skipped: tool numbers"),
     CommandSpec::new("cam.tool.remove", "Remove Tool", tool_remove).icon("delete").params("number (refused while an operation uses it)"),
+    CommandSpec::new("cam.machine.add", "Add Machine", crate::checked!("cam.machine.add", machine_add))
+        .icon("cam_setup")
+        .contract(&MACHINE_ADD_CONTRACT)
+        .output(output_schema_for::<MachineResult>)
+        .params(
+            "name: unique in the design; axes: [{type: linear, name: X|Y|Z, min, max} | {type: rotary, name: A|B|C, axis: [x, y, z], on: \
+             table|head, pivot?: [x, y, z], limits?: [lower, upper] degrees (none: continuous)}] from the table to the tool; post?: the post a \
+             setup on it takes when given none → machine: its name",
+        ),
+    CommandSpec::new("cam.machine.edit", "Edit Machine", crate::checked!("cam.machine.edit", machine_edit))
+        .icon("edit")
+        .contract(&MACHINE_EDIT_CONTRACT)
+        .output(output_schema_for::<MachineResult>)
+        .params("machine: its name; then any of name (setups on it follow), axes (all of them), post (null: none) as in cam.machine.add → machine"),
+    CommandSpec::new("cam.machine.remove", "Remove Machine", crate::checked!("cam.machine.remove", machine_remove))
+        .icon("delete")
+        .contract(&MACHINE_REMOVE_CONTRACT)
+        .output(output_schema_for::<MachineRemoved>)
+        .params("machine: its name (refused while a setup runs on it) → removed"),
+    CommandSpec::new("cam.machine.list", "List Machines", crate::checked!("cam.machine.list", machine_list))
+        .icon("library")
+        .noundo()
+        .contract(&MACHINE_LIST_CONTRACT)
+        .output(output_schema_for::<MachineList>)
+        .params("→ machines: [{name, axes, post?, setups: the names of the setups on it}]"),
     CommandSpec::new("cam.setup.create", "New Setup", setup_create)
         .at("MANUFACTURE", "SETUP")
         .icon("cam_setup")
         .params(SETUP_DOC),
-    CommandSpec::new("cam.setup.edit", "Edit Setup", setup_edit).icon("edit").params("setup: id or name; then any of name, axis, origin, stock, bodies, fixtures, post, material, work_offset, stock_from, x_axis, clamps, copies as in cam.setup.create (what stock leaves out stays as it is)"),
+    CommandSpec::new("cam.setup.edit", "Edit Setup", setup_edit).icon("edit").params("setup: id or name; then any of name, axis, origin, stock, bodies, fixtures, post, machine, material, work_offset, stock_from, x_axis, clamps, copies as in cam.setup.create (what stock leaves out stays as it is; a new machine brings its post unless post is given)"),
     CommandSpec::new("cam.sheet", "Setup Sheet", sheet).icon("cam_post").noundo().params(
         "setup?: id or name; path?: file to write → lines, and text (Markdown) when no path is given: the setup sheet to print for the machine: \
          the stock and the work zero, the tools, the operations in order with their speeds, feeds, depths and times, and the warnings",
@@ -1088,7 +1124,9 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => stock_param(s, v, &StockDef::default(), cmd)?,
         None => StockDef::default(),
     };
-    let post = str_(p, "post").unwrap_or("rs274");
+    let machine = machine_param(s, p, cmd)?.flatten();
+    let machine_post = machine.as_deref().and_then(|m| s.doc.manufacture.machine(m)).and_then(|m| m.post.clone());
+    let post = str_(p, "post").or(machine_post.as_deref()).unwrap_or("rs274");
     let post = Post::builtin(post).ok_or_else(|| bad(cmd, format!("unknown post `{post}` (known: {})", Post::BUILTIN.join(", "))))?.name;
     let material = material_param(p, cmd)?.flatten();
     let work_offset = work_offset_param(p, cmd)?.unwrap_or(54);
@@ -1108,7 +1146,7 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         fixtures,
         material,
         post,
-        machine: None,
+        machine,
         work_offset,
         stock_from,
         clamps,
@@ -1133,6 +1171,16 @@ fn setup_edit(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, format!("there is already a setup `{n}`")));
         }
         setup.name = n;
+    }
+    if let Some(machine) = machine_param(s, p, cmd)? {
+        // A new machine brings its post, unless the call gives one.
+        if machine != setup.machine
+            && p.get("post").is_none()
+            && let Some(post) = machine.as_deref().and_then(|m| s.doc.manufacture.machine(m)).and_then(|m| m.post.clone())
+        {
+            setup.post = post;
+        }
+        setup.machine = machine;
     }
     if let Some(post) = p.get("post") {
         let post = post.as_str().unwrap_or_default();
@@ -1184,6 +1232,115 @@ fn setup_edit(s: &mut Session, p: &Value) -> Result<Value> {
         *slot = setup;
     }
     Ok(json!({ "setup": id, "name": name }))
+}
+
+/// `machine`: a machine of the design by name, ignoring case (`null`: none).
+fn machine_param(s: &Session, p: &Value, cmd: &str) -> Result<Option<Option<String>>> {
+    match p.get("machine") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(m)) => machine_named(s, m, cmd).map(|m| Some(Some(m.name.clone()))),
+        Some(_) => Err(bad(cmd, "`machine` must be a machine's name")),
+    }
+}
+
+/// The design's machine with this name, ignoring case.
+fn machine_named<'a>(s: &'a Session, name: &str, cmd: &str) -> Result<&'a Machine> {
+    let name = name.trim();
+    s.doc.manufacture.machines.iter().find(|m| m.name.eq_ignore_ascii_case(name)).ok_or_else(|| {
+        let known: Vec<&str> = s.doc.manufacture.machines.iter().map(|m| m.name.as_str()).collect();
+        bad(cmd, format!("there is no machine `{name}` (machines: {})", if known.is_empty() { "none".to_string() } else { known.join(", ") }))
+    })
+}
+
+/// A post's canonical name, or the handler's message for an unknown one.
+fn post_name(post: &str, cmd: &str) -> Result<String> {
+    Ok(Post::builtin(post.trim()).ok_or_else(|| bad(cmd, format!("unknown post `{post}` (known: {})", Post::BUILTIN.join(", "))))?.name)
+}
+
+/// A machine's name from a call: trimmed, not blank, not taken by another machine (ignoring case).
+fn machine_name(s: &Session, name: &str, except: Option<usize>, cmd: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(bad(cmd, "`name` must not be blank"));
+    }
+    if s.doc.manufacture.machines.iter().enumerate().any(|(i, m)| Some(i) != except && m.name.eq_ignore_ascii_case(name)) {
+        return Err(bad(cmd, format!("there is already a machine `{name}`")));
+    }
+    Ok(name.to_string())
+}
+
+fn machine_add(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.machine.add";
+    let request: MachineAddParams = serde_json::from_value(p.clone()).map_err(|e| bad(cmd, e.to_string()))?;
+    if s.doc.manufacture.machines.len() >= MAX_MACHINES {
+        return Err(bad(cmd, "too many machines"));
+    }
+    let machine = Machine {
+        name: machine_name(s, &request.name, None, cmd)?,
+        axes: request.axes.into_iter().map(Into::into).collect(),
+        post: request.post.as_deref().map(|p| post_name(p, cmd)).transpose()?,
+    };
+    machine.check().map_err(|e| bad(cmd, e))?;
+    let name = machine.name.clone();
+    s.doc_mut().manufacture.machines.push(machine);
+    serde_json::to_value(MachineResult { machine: name, param_warnings: Vec::new() }).map_err(|e| bad(cmd, e.to_string()))
+}
+
+fn machine_edit(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.machine.edit";
+    let request: MachineEditParams = serde_json::from_value(p.clone()).map_err(|e| bad(cmd, e.to_string()))?;
+    let old = machine_named(s, &request.machine, cmd)?.name.clone();
+    let i = s.doc.manufacture.machines.iter().position(|m| m.name == old).ok_or_else(|| bad(cmd, "no such machine"))?;
+    let mut machine = s.doc.manufacture.machines.get(i).cloned().ok_or_else(|| bad(cmd, "no such machine"))?;
+    if let Some(name) = &request.name {
+        machine.name = machine_name(s, name, Some(i), cmd)?;
+    }
+    if let Some(axes) = request.axes {
+        machine.axes = axes.into_iter().map(Into::into).collect();
+    }
+    if let Some(post) = request.post {
+        machine.post = post.as_deref().map(|p| post_name(p, cmd)).transpose()?;
+    }
+    machine.check().map_err(|e| bad(cmd, e))?;
+    let name = machine.name.clone();
+    let doc = s.doc_mut();
+    for setup in &mut doc.manufacture.setups {
+        if setup.machine.as_deref() == Some(old.as_str()) {
+            setup.machine = Some(name.clone());
+        }
+    }
+    if let Some(slot) = doc.manufacture.machines.get_mut(i) {
+        *slot = machine;
+    }
+    serde_json::to_value(MachineResult { machine: name, param_warnings: Vec::new() }).map_err(|e| bad(cmd, e.to_string()))
+}
+
+fn machine_remove(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.machine.remove";
+    let request: MachineRemoveParams = serde_json::from_value(p.clone()).map_err(|e| bad(cmd, e.to_string()))?;
+    let name = machine_named(s, &request.machine, cmd)?.name.clone();
+    let on: Vec<&str> = s.doc.manufacture.setups.iter().filter(|x| x.machine.as_deref() == Some(name.as_str())).map(|x| x.name.as_str()).collect();
+    if !on.is_empty() {
+        return Err(bad(cmd, format!("machine `{name}` is used by setups {}: give them another machine first", on.join(", "))));
+    }
+    s.doc_mut().manufacture.machines.retain(|m| m.name != name);
+    serde_json::to_value(MachineRemoved { removed: name, param_warnings: Vec::new() }).map_err(|e| bad(cmd, e.to_string()))
+}
+
+fn machine_list(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "cam.machine.list";
+    let _: MachineListParams = serde_json::from_value(if p.is_null() { json!({}) } else { p.clone() }).map_err(|e| bad(cmd, e.to_string()))?;
+    let m = &s.doc.manufacture;
+    let machines = m
+        .machines
+        .iter()
+        .map(|machine| {
+            let setups = m.setups.iter().filter(|x| x.machine.as_deref() == Some(machine.name.as_str())).map(|x| x.name.clone()).collect();
+            MachineEntry::new(machine, setups)
+        })
+        .collect();
+    serde_json::to_value(MachineList { machines, param_warnings: Vec::new() }).map_err(|e| bad(cmd, e.to_string()))
 }
 
 /// The tool axis from `"+z"`, `"-x"`… or a direction `[x, y, z]`.

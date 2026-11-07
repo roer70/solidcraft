@@ -2539,3 +2539,102 @@ fn rest_finishing_goes_only_where_the_larger_ball_left_material() {
     run(&mut s, "cam.op.edit", json!({"op": rest["operation"], "rest": false}));
     assert!(matches!(&s.doc.manufacture.setups[0].operations[2].kind, solidcraft_doc::manufacture::CamOperationKind::Parallel3d { rest: false, .. }));
 }
+
+/// A four-axis router: A on the table about X, then X, Y and Z.
+fn flexihal() -> Value {
+    json!({"name": "FlexiHAL", "post": "grblhal", "axes": [
+        {"type": "rotary", "name": "A", "axis": [1, 0, 0], "on": "table", "pivot": [0, 0, 40]},
+        {"type": "linear", "name": "X", "min": 0, "max": 300},
+        {"type": "linear", "name": "Y", "min": 0, "max": 200},
+        {"type": "linear", "name": "Z", "min": -90, "max": 0},
+    ]})
+}
+
+/// A machine is added, a setup runs on it and takes its post, and the design saves, loads and
+/// lists it with the setup on it.
+#[test]
+fn a_machine_is_added_used_by_a_setup_saved_and_listed() {
+    let mut s = Session::default();
+    assert_eq!(run(&mut s, "cam.machine.add", flexihal()), json!({"machine": "FlexiHAL"}));
+    run(&mut s, "cam.setup.create", json!({"name": "Side", "machine": "flexihal"}));
+    let setup = &s.doc.manufacture.setups[0];
+    assert_eq!((setup.machine.as_deref(), setup.post.as_str()), (Some("FlexiHAL"), "grblhal"), "the machine by its own name, and its post");
+    run(&mut s, "cam.setup.create", json!({"name": "Plain"}));
+    assert_eq!((s.doc.manufacture.setups[1].machine.as_deref(), s.doc.manufacture.setups[1].post.as_str()), (None, "rs274"));
+
+    s.doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into();
+    let listed = run(&mut s, "cam.machine.list", json!({}));
+    let machine = &listed["machines"][0];
+    assert_eq!(listed["machines"].as_array().map(Vec::len), Some(1));
+    assert_eq!((machine["name"].as_str(), machine["post"].as_str(), machine["setups"].clone()), (Some("FlexiHAL"), Some("grblhal"), json!(["Side"])));
+    assert_eq!(machine["axes"].as_array().map(Vec::len), Some(4));
+    assert_eq!(machine["axes"][0], json!({"type": "rotary", "name": "A", "axis": [1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, 0.0, 40.0]}));
+}
+
+/// Editing renames a machine with its setups following, replaces its axes and clears its post;
+/// a setup given another machine takes that one's post unless it is given its own.
+#[test]
+fn a_machine_is_edited_and_setups_follow() {
+    let mut s = Session::default();
+    run(&mut s, "cam.machine.add", flexihal());
+    run(&mut s, "cam.machine.add", json!({"name": "Router", "axes": [{"type": "linear", "name": "X", "min": 0, "max": 600}], "post": "grbl"}));
+    run(&mut s, "cam.setup.create", json!({"name": "Side", "machine": "FlexiHAL"}));
+    run(&mut s, "cam.machine.edit", json!({"machine": "FlexiHAL", "name": "Flexi", "post": null}));
+    assert_eq!(s.doc.manufacture.setups[0].machine.as_deref(), Some("Flexi"));
+    assert_eq!(s.doc.manufacture.machine("Flexi").and_then(|m| m.post.clone()), None);
+    run(&mut s, "cam.machine.edit", json!({"machine": "Flexi", "axes": [{"type": "linear", "name": "Z", "min": -50, "max": 0}]}));
+    assert_eq!(s.doc.manufacture.machine("Flexi").map(|m| m.axes.len()), Some(1));
+
+    run(&mut s, "cam.setup.edit", json!({"setup": "Side", "machine": "Router"}));
+    assert_eq!((s.doc.manufacture.setups[0].machine.as_deref(), s.doc.manufacture.setups[0].post.as_str()), (Some("Router"), "grbl"));
+    run(&mut s, "cam.setup.edit", json!({"setup": "Side", "machine": "Flexi", "post": "lnc"}));
+    assert_eq!((s.doc.manufacture.setups[0].machine.as_deref(), s.doc.manufacture.setups[0].post.as_str()), (Some("Flexi"), "lnc"));
+    run(&mut s, "cam.setup.edit", json!({"setup": "Side", "machine": null}));
+    assert_eq!((s.doc.manufacture.setups[0].machine.as_deref(), s.doc.manufacture.setups[0].post.as_str()), (None, "lnc"));
+}
+
+/// A machine a setup runs on can't be removed, an unknown one can't be named, and a damaged
+/// machine is refused before anything changes.
+#[test]
+fn machines_refuse_what_would_break_the_design() {
+    let mut s = Session::default();
+    run(&mut s, "cam.machine.add", flexihal());
+    run(&mut s, "cam.setup.create", json!({"name": "Side", "machine": "FlexiHAL"}));
+    let refused = |s: &mut Session, id: &str, p: Value, says: &str| {
+        let before = s.doc.manufacture.clone();
+        let e = s.execute(id, &p).err().unwrap_or_else(|| panic!("{id} {p} was accepted")).to_string();
+        assert!(e.contains(says), "{id} {p}: {e}");
+        assert_eq!(s.doc.manufacture, before, "{id} {p} changed the design");
+    };
+    refused(&mut s, "cam.machine.remove", json!({"machine": "FlexiHAL"}), "used by setups Side");
+    refused(&mut s, "cam.machine.remove", json!({"machine": "Haas"}), "there is no machine `Haas`");
+    refused(&mut s, "cam.machine.edit", json!({"machine": "Haas", "name": "X"}), "there is no machine `Haas`");
+    refused(&mut s, "cam.setup.create", json!({"machine": "Haas"}), "there is no machine `Haas`");
+    refused(&mut s, "cam.setup.edit", json!({"setup": "Side", "machine": "Haas"}), "there is no machine `Haas`");
+    refused(&mut s, "cam.machine.add", flexihal(), "there is already a machine `FlexiHAL`");
+    refused(&mut s, "cam.machine.add", json!({"name": "Empty", "axes": []}), "has no axes");
+    refused(
+        &mut s,
+        "cam.machine.add",
+        json!({"name": "Twice", "axes": [
+        {"type": "linear", "name": "X", "min": 0, "max": 1}, {"type": "linear", "name": "X", "min": 0, "max": 1}]}),
+        "two X axes",
+    );
+    refused(
+        &mut s,
+        "cam.machine.add",
+        json!({"name": "Bad post", "axes": [{"type": "linear", "name": "X", "min": 0, "max": 1}], "post": "fanuc"}),
+        "unknown post `fanuc`",
+    );
+    refused(
+        &mut s,
+        "cam.machine.edit",
+        json!({"machine": "FlexiHAL", "axes": [{"type": "rotary", "name": "A", "axis": [0, 0, 0], "on": "table"}]}),
+        "a direction to turn about",
+    );
+    refused(&mut s, "cam.machine.edit", json!({"machine": "FlexiHAL", "name": " "}), "must not be blank");
+
+    run(&mut s, "cam.setup.edit", json!({"setup": "Side", "machine": null}));
+    assert_eq!(run(&mut s, "cam.machine.remove", json!({"machine": "flexihal"})), json!({"removed": "FlexiHAL"}));
+    assert!(s.doc.manufacture.machines.is_empty());
+}
