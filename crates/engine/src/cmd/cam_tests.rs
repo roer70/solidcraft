@@ -2540,14 +2540,33 @@ fn rest_finishing_goes_only_where_the_larger_ball_left_material() {
     assert!(matches!(&s.doc.manufacture.setups[0].operations[2].kind, solidcraft_doc::manufacture::CamOperationKind::Parallel3d { rest: false, .. }));
 }
 
-/// A four-axis router: A on the table about X, then X, Y and Z.
+/// The FlexiHAL example design: a script that adds the machine and a setup on it.
+fn flexihal_script() -> Value {
+    serde_json::from_str(include_str!("../../../../examples/cam/flexihal.json")).unwrap()
+}
+
+/// A four-axis router: A on the table about X, then X, Y and Z (the example's `cam.machine.add`).
 fn flexihal() -> Value {
-    json!({"name": "FlexiHAL", "post": "grblhal", "axes": [
-        {"type": "rotary", "name": "A", "axis": [1, 0, 0], "on": "table", "pivot": [0, 0, 40]},
-        {"type": "linear", "name": "X", "min": 0, "max": 300},
-        {"type": "linear", "name": "Y", "min": 0, "max": 200},
-        {"type": "linear", "name": "Z", "min": -90, "max": 0},
-    ]})
+    flexihal_script()["commands"][0]["params"].clone()
+}
+
+/// The example design runs, saves and loads, and lists the machine as the owner measured it.
+#[test]
+fn the_flexihal_example_saves_loads_and_lists_its_machine() {
+    let mut s = Session::default();
+    s.run_script(&flexihal_script()).unwrap();
+    s.doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into();
+    let listed = run(&mut s, "cam.machine.list", json!({}));
+    assert_eq!(
+        listed["machines"],
+        json!([{"name": "FlexiHAL", "post": "grblhal", "setups": ["Top"], "axes": [
+            {"type": "rotary", "name": "A", "axis": [-1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, 300.0, 20.0]},
+            {"type": "linear", "name": "X", "min": -650.0, "max": 0.0},
+            {"type": "linear", "name": "Y", "min": 0.0, "max": 1000.0},
+            {"type": "linear", "name": "Z", "min": -130.0, "max": 0.0},
+        ]}])
+    );
+    assert_eq!(s.doc.manufacture.setups[0].post, "grblhal");
 }
 
 /// A machine is added, a setup runs on it and takes its post, and the design saves, loads and
@@ -2568,7 +2587,7 @@ fn a_machine_is_added_used_by_a_setup_saved_and_listed() {
     assert_eq!(listed["machines"].as_array().map(Vec::len), Some(1));
     assert_eq!((machine["name"].as_str(), machine["post"].as_str(), machine["setups"].clone()), (Some("FlexiHAL"), Some("grblhal"), json!(["Side"])));
     assert_eq!(machine["axes"].as_array().map(Vec::len), Some(4));
-    assert_eq!(machine["axes"][0], json!({"type": "rotary", "name": "A", "axis": [1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, 0.0, 40.0]}));
+    assert_eq!(machine["axes"][0], json!({"type": "rotary", "name": "A", "axis": [-1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, 300.0, 20.0]}));
 }
 
 /// Editing renames a machine with its setups following, replaces its axes and clears its post;

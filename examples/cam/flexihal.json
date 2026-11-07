@@ -1,0 +1,12 @@
+{
+  "description": "The owner's FlexiHAL router as a machine, and a setup on it. The values are estimates, not yet measured on the machine. Homing puts machine zero in the front right corner with Z up: X travels 650 mm to the left (negative), Y 1000 mm back, Z 130 mm down. A turns about X on the table, continuously, its centre at Y 300 and 40 mm above the table, which is at Z -20; positive A is clockwise seen from X+, so it turns about -X. The post is grblHAL.",
+  "commands": [
+    {"command": "cam.machine.add", "params": {"name": "FlexiHAL", "post": "grblhal", "axes": [
+      {"type": "rotary", "name": "A", "axis": [-1, 0, 0], "on": "table", "pivot": [0, 300, 20]},
+      {"type": "linear", "name": "X", "min": -650, "max": 0},
+      {"type": "linear", "name": "Y", "min": 0, "max": 1000},
+      {"type": "linear", "name": "Z", "min": -130, "max": 0}
+    ]}},
+    {"command": "cam.setup.create", "params": {"name": "Top", "machine": "FlexiHAL"}}
+  ]
+}
