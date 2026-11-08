@@ -2623,6 +2623,47 @@ fn the_a_angle_points_a_setup_axis_up_on_flexihal() {
     assert!(e.contains("has no rotary A axis"), "{e}");
 }
 
+/// Two setups on one clamping: the second, from below on FlexiHAL, stays clamped and turns A to
+/// 180, and its sheet asks for no new clamping; one turned over by hand still says how. The
+/// design keeps it, and it needs the setup it stays in.
+#[test]
+fn a_setup_in_the_same_clamping_is_turned_with_a_not_clamped_again() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));
+    run(&mut s, "cam.machine.add", flexihal());
+    let top = json!({"of": "stock", "x": "min", "y": "min", "z": "max"});
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "origin": top, "machine": "FlexiHAL"}));
+    run(
+        &mut s,
+        "cam.setup.create",
+        json!({"name": "Bottom", "axis": "-z", "origin": top, "machine": "FlexiHAL", "stock_from": "Top", "same_clamping": true}),
+    );
+    run(&mut s, "cam.setup.create", json!({"name": "Flipped", "axis": "-z", "origin": top, "stock_from": "Top"}));
+    let sheet = |s: &mut Session, name: &str| run(s, "cam.sheet", json!({"setup": name}))["text"].as_str().unwrap().to_string();
+
+    let bottom = sheet(&mut s, "Bottom");
+    assert!(bottom.contains("- Same clamping as Top: leave the part clamped, turn A to 180°"), "{bottom}");
+    assert!(!bottom.contains("part flipped"), "{bottom}");
+    let flipped = sheet(&mut s, "Flipped");
+    assert!(flipped.contains("part flipped about the X axis") && !flipped.contains("Same clamping"), "{flipped}");
+
+    s.doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into();
+    let listed = run(&mut s, "cam.list", json!({}));
+    let same: Vec<Value> = listed["setups"].as_array().unwrap().iter().map(|x| x["same_clamping"].clone()).collect();
+    assert_eq!(same, [json!(false), json!(true), json!(false)]);
+
+    for bad in [json!({"name": "Alone", "same_clamping": true}), json!({"name": "Odd", "stock_from": "Top", "same_clamping": "yes"})] {
+        assert!(s.execute("cam.setup.create", &bad).is_err(), "{bad}");
+    }
+    assert!(s.execute("cam.setup.edit", &json!({"setup": "Flipped", "same_clamping": true, "stock_from": null})).is_err());
+    // Built on no earlier setup, it is in no earlier clamping either.
+    run(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "stock_from": null}));
+    assert!(!s.doc.manufacture.setups[1].same_clamping);
+    run(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "stock_from": "Top", "same_clamping": true}));
+    run(&mut s, "cam.setup.remove", json!({"setup": "Top"}));
+    assert!(s.doc.manufacture.setups.iter().all(|x| x.stock_from.is_none() && !x.same_clamping));
+}
+
 /// A machine is added, a setup runs on it and takes its post, and the design saves, loads and
 /// lists it with the setup on it.
 #[test]

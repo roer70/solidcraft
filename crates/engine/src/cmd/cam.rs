@@ -73,7 +73,8 @@ const SETUP_DOC: &str = "name?; axis?: +x|-x|+y|-y|+z|-z or [x, y, z], the direc
      rs274, or the machine's); machine?: the machine it runs on, by name (cam.machine.add; null: none, a generic three-axis mill); \
      material?: what the stock is made of (operations take their tool's cutting data for it; null: none); work_offset?: G54 to G59 \
      (or 54 to 59; default G54), the work offset its programs run in; stock_from?: an earlier setup (id or name; null: none) whose result \
-     is the stock, its tool axis the same or turned over (the part turned over about the world X axis for a setup from -z); x_axis?: the setup's X direction across its \
+     is the stock, its tool axis the same or turned over (the part turned over about the world X axis for a setup from -z); same_clamping?: true when the part stays clamped as for stock_from's setup and is only turned with \
+     A, so its sheet asks for no new clamping (needs stock_from; default false); x_axis?: the setup's X direction across its \
      axis, as axis is given (default: worked out from the axis; from -z, +x turns the part about X and -x about Y); clamps?: \
      [{name?, min: [x, y], max: [x, y], top}] boxes in work coordinates no tool may enter (operations that do are warned about); copies?: \
      {nx, ny, dx, dy}: copies of the part in rows along X and columns along Y, dx and dy apart, each cut by every operation (null: one) → setup: id, name";
@@ -150,7 +151,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("MANUFACTURE", "SETUP")
         .icon("cam_setup")
         .params(SETUP_DOC),
-    CommandSpec::new("cam.setup.edit", "Edit Setup", setup_edit).icon("edit").params("setup: id or name; then any of name, axis, origin, stock, bodies, fixtures, post, machine, material, work_offset, stock_from, x_axis, clamps, copies as in cam.setup.create (what stock leaves out stays as it is; a new machine brings its post unless post is given)"),
+    CommandSpec::new("cam.setup.edit", "Edit Setup", setup_edit).icon("edit").params("setup: id or name; then any of name, axis, origin, stock, bodies, fixtures, post, machine, material, work_offset, stock_from, same_clamping, x_axis, clamps, copies as in cam.setup.create (stock_from null also ends same_clamping; what stock leaves out stays as it is; a new machine brings its post unless post is given)"),
     CommandSpec::new("cam.sheet", "Setup Sheet", sheet).icon("cam_post").noundo().params(
         "setup?: id or name; path?: file to write → lines, and text (Markdown) when no path is given: the setup sheet to print for the machine: \
          the stock and the work zero, the tools, the operations in order with their speeds, feeds, depths and times, and the warnings",
@@ -879,6 +880,19 @@ fn stock_from_param(s: &Session, p: &Value, at: Option<usize>, axis: Vec3, cmd: 
     }
 }
 
+/// `same_clamping`: true when the part stays clamped as for `stock_from`'s setup and is only
+/// turned with A (`null`: false).
+fn same_clamping_param(p: &Value, cmd: &str) -> Result<Option<bool>> {
+    match p.get("same_clamping") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(false)),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(bad(cmd, "`same_clamping` must be true, false or null")),
+    }
+}
+
+const SAME_CLAMPING_NEEDS_STOCK_FROM: &str = "`same_clamping` needs `stock_from`: the setup whose clamping it stays in";
+
 /// Most copies of the part on one setup.
 const MAX_COPIES: u32 = 1000;
 
@@ -1131,6 +1145,10 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
     let material = material_param(p, cmd)?.flatten();
     let work_offset = work_offset_param(p, cmd)?.unwrap_or(54);
     let stock_from = stock_from_param(s, p, None, axis, cmd)?.flatten();
+    let same_clamping = same_clamping_param(p, cmd)?.unwrap_or(false);
+    if same_clamping && stock_from.is_none() {
+        return Err(bad(cmd, SAME_CLAMPING_NEEDS_STOCK_FROM));
+    }
     let x_axis = x_axis_param(p, cmd)?.flatten();
     let clamps = clamps_param(p, cmd)?.unwrap_or_default();
     let copies = copies_param(p, cmd)?.flatten();
@@ -1149,6 +1167,7 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         machine,
         work_offset,
         stock_from,
+        same_clamping,
         clamps,
         copies,
         x_axis,
@@ -1206,6 +1225,16 @@ fn setup_edit(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(from) = stock_from_param(s, p, Some(i), setup.axis, cmd)? {
         setup.stock_from = from;
+        // A setup no longer built on an earlier one is not in its clamping either.
+        if from.is_none() {
+            setup.same_clamping = false;
+        }
+    }
+    if let Some(same) = same_clamping_param(p, cmd)? {
+        setup.same_clamping = same;
+    }
+    if setup.same_clamping && setup.stock_from.is_none() {
+        return Err(bad(cmd, SAME_CLAMPING_NEEDS_STOCK_FROM));
     }
     if let Some(clamps) = clamps_param(p, cmd)? {
         setup.clamps = clamps;
@@ -1900,6 +1929,7 @@ fn setup_remove(s: &mut Session, p: &Value) -> Result<Value> {
     for later in &mut doc.manufacture.setups {
         if later.stock_from == Some(removed.id) {
             later.stock_from = None;
+            later.same_clamping = false;
         }
     }
     Ok(json!({ "removed": removed.id, "name": removed.name }))
@@ -4074,7 +4104,7 @@ fn list_now(s: &Session) -> Value {
                 })
                 .collect();
             let mut v = json!({"id": setup.id, "name": setup.name, "axis": setup.axis, "origin": setup.origin, "stock": setup.stock, "bodies": setup.bodies, "fixtures": setup.fixtures,
-                "material": setup.material, "post": setup.post, "work_offset": setup.work_offset, "x_axis": setup.x_axis, "stock_from": setup.stock_from, "clamps": setup.clamps, "copies": setup.copies, "tool_changes": tool_changes(setup), "operations": ops});
+                "material": setup.material, "post": setup.post, "work_offset": setup.work_offset, "x_axis": setup.x_axis, "stock_from": setup.stock_from, "same_clamping": setup.same_clamping, "clamps": setup.clamps, "copies": setup.copies, "tool_changes": tool_changes(setup), "operations": ops});
             // Worked out against the model: the work frame in the world, and the boxes in work coordinates.
             match resolve(s, setup) {
                 Ok(at) => {
@@ -4446,13 +4476,16 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The comment lines at the top of a program, for checking it at the machine: the stock and
 /// where its top and bottom are, where the work zero is, the tools and the cutting time.
-fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: f64) -> Vec<String> {
+/// `clamping`: the note for a setup that stays in an earlier one's clamping ([`clamping_note`]).
+fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: f64, clamping: Option<String>) -> Vec<String> {
     let mm = |v: f64| {
         let t = format!("{:.3}", v + 0.0);
         let t = t.trim_end_matches('0').trim_end_matches('.').to_string();
         if t == "-0" { "0".to_string() } else { t }
     };
     let mut notes = Vec::new();
+    let kept = clamping.is_some();
+    notes.extend(clamping);
     if let (Some((lo, hi)), Some((c, r))) = (at.stock, at.round) {
         notes.push(format!(
             "Stock round bar D{} x {} mm, centre X{} Y{}, top at Z{}, bottom at Z{}",
@@ -4498,8 +4531,8 @@ fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: 
             format!("Work zero G{}: {on} of {body}, {z}", setup.work_offset)
         }
     });
-    // Seen from below: how the part is turned over for it.
-    if setup.axis.z < -1.0 + 1e-9 {
+    // Seen from below: how the part is turned over for it (by hand: A turns a part left clamped).
+    if !kept && setup.axis.z < -1.0 + 1e-9 {
         let about = if at.frame.x.x > 0.5 {
             "X"
         } else if at.frame.x.x < -0.5 {
@@ -4532,6 +4565,25 @@ fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: 
     notes.push(format!("Tools loaded: {changes}"));
     notes.push(format!("Cutting time about {} min", mm((minutes * 10.0).round() / 10.0)));
     notes
+}
+
+/// For a setup that stays in an earlier one's clamping: that the part is left clamped and only
+/// turned with A, and to what angle when its machine has a rotary A that reaches the tool axis.
+fn clamping_note(s: &Session, setup: &Setup) -> Option<String> {
+    if !setup.same_clamping {
+        return None;
+    }
+    let earlier = setup.stock_from.and_then(|id| s.doc.manufacture.setups.iter().find(|x| x.id == id))?;
+    let angle = setup.machine.as_deref().and_then(|m| s.doc.manufacture.machine(m)).and_then(|m| m.a_angle(setup.axis).ok());
+    let turn = match angle {
+        Some(a) => {
+            let a = format!("{:.3}", a + 0.0);
+            let a = a.trim_end_matches('0').trim_end_matches('.');
+            format!("turn A to {}°", if a == "-0" { "0" } else { a })
+        }
+        None => "turn it with A".to_string(),
+    };
+    Some(format!("Same clamping as {}: leave the part clamped, {turn}", earlier.name))
 }
 
 /// A setup's sheet for the machine, in Markdown: what to clamp and where the zero is, the
@@ -4570,7 +4622,7 @@ fn sheet(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     let minutes: f64 = ops.iter().filter_map(|o| o["toolpath"]["cut_minutes"].as_f64()).sum();
-    for note in program_notes(&setup, &at, &programs, minutes) {
+    for note in program_notes(&setup, &at, &programs, minutes, clamping_note(s, &setup)) {
         out.push(format!("- {}", cell(&note)));
     }
     out.push(format!("- Post: {}", cell(&setup.post)));
@@ -4683,7 +4735,7 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
         let tool = s.doc.manufacture.tool(op.tool).cloned().ok_or_else(|| bad(cmd, format!("no tool {}", op.tool)))?;
         program.operations.push(cam::Operation { name: op.name.clone(), tool, spindle_rpm: op.spindle_rpm, coolant: op.coolant, path });
     }
-    program.notes = program_notes(setup, &at, &program.operations, minutes);
+    program.notes = program_notes(setup, &at, &program.operations, minutes, clamping_note(s, setup));
     let text = cam::emit(&program, &post).map_err(cam_error)?;
     let mut out = json!({"lines": text.lines().count(), "extension": post.extension, "post": post.name, "cut_minutes": minutes});
     match str_(p, "path") {

@@ -252,6 +252,10 @@ pub struct Setup {
     /// An earlier setup whose result is this one's stock (the part turned over, say): its id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_from: Option<u64>,
+    /// The part stays clamped as it was for `stock_from`'s setup and is only turned with the A
+    /// axis: no new clamping between them (false: it is taken out and clamped again).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub same_clamping: bool,
     /// What holds the stock that no tool may touch (clamps, vices), in the setup's work coordinates.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clamps: Vec<Clamp>,
