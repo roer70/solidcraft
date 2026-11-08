@@ -24,6 +24,7 @@ mod ops;
 mod path;
 mod piece;
 mod post;
+mod rotary;
 mod sim;
 mod tool;
 
@@ -39,6 +40,7 @@ pub use ops::{
 };
 pub use path::{Move, PathStats, Toolpath, arc_sweep};
 pub use post::{CommentStyle, LineNumbers, Post, Units};
+pub use rotary::rotary_angle;
 pub use sim::{
     Comparison, CutReport, DEFAULT_RAPID_RATE, HeightField, MAX_CELLS, Playback, Step, compare, compare_within, deviations, deviations_within, gouge,
     simulate, tool_floor,

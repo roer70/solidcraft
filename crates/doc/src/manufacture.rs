@@ -80,6 +80,23 @@ impl Machine {
         self.axes.iter().find(|a| a.name() == name)
     }
 
+    /// The A angle, in degrees, that points a setup's tool axis (`tool_axis`, in the part's
+    /// coordinates at A 0) down the machine's tool: on the table A turns the part until the axis
+    /// is machine +Z; on the head A turns the tool from +Z to the axis. An error when the machine
+    /// has no rotary A, the axis is not square to A, or the angle is outside A's limits.
+    pub fn a_angle(&self, tool_axis: Vec3) -> std::result::Result<f64, String> {
+        let name = &self.name;
+        let Some(MachineAxis::Rotary { axis, on, limits, .. }) = self.axis(AxisName::A) else {
+            return Err(format!("machine \"{name}\" has no rotary A axis"));
+        };
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let (from, to) = match on {
+            Carrier::Table => (tool_axis, up),
+            Carrier::Head => (up, tool_axis),
+        };
+        solidcraft_cam::rotary_angle(*axis, from, to, *limits).map_err(|e| format!("machine \"{name}\", axis A: {e}"))
+    }
+
     /// Checks that the machine can be used: a name, at least one axis and no more than
     /// [`MAX_MACHINE_AXES`], no axis named twice, and every axis sound.
     pub fn check(&self) -> std::result::Result<(), String> {

@@ -2263,3 +2263,42 @@ fn rest_finishing_cleans_only_where_a_larger_ball_could_not_reach() {
         every.stats().cut_length
     );
 }
+
+/// The turn about an axis that takes one direction to another, in degrees from −180 to 180
+/// when the axis turns freely, and inside its limits when it has them.
+#[test]
+fn a_turn_about_x_takes_the_tool_axis_to_up() {
+    let x = Vec3::new(1.0, 0.0, 0.0);
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    for (from, want) in [
+        (Vec3::new(0.0, 0.0, 1.0), 0.0),
+        (Vec3::new(0.0, 1.0, 0.0), 90.0),
+        (Vec3::new(0.0, 0.0, -1.0), 180.0),
+        (Vec3::new(0.0, -1.0, 0.0), -90.0),
+        (Vec3::new(0.0, -1.0, 1.0), -45.0),
+    ] {
+        close(rotary_angle(x, from, up, None).unwrap(), want, 1e-9);
+    }
+    // About −X the same turns go the other way.
+    close(rotary_angle(Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), up, None).unwrap(), -90.0, 1e-9);
+    // Limits take the turn a whole round on, or refuse it.
+    close(rotary_angle(x, Vec3::new(0.0, -1.0, 0.0), up, Some([0.0, 360.0])).unwrap(), 270.0, 1e-9);
+    let e = rotary_angle(x, Vec3::new(0.0, -1.0, 0.0), up, Some([0.0, 120.0])).unwrap_err().to_string();
+    assert!(e.contains("outside"), "{e}");
+}
+
+/// A direction the axis can't turn to up is refused, not rounded.
+#[test]
+fn a_turn_is_refused_for_a_direction_off_square_to_the_axis() {
+    let x = Vec3::new(1.0, 0.0, 0.0);
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    for (about, from) in [
+        (x, Vec3::new(0.2, 0.0, 1.0)),
+        (x, Vec3::new(1.0, 0.0, 0.0)),
+        (Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)),
+        (Vec3::new(0.0, 0.0, 0.0), up),
+        (x, Vec3::new(f64::NAN, 0.0, 1.0)),
+    ] {
+        assert!(rotary_angle(about, from, up, None).is_err(), "{about:?} {from:?}");
+    }
+}

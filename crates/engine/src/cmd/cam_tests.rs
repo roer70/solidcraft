@@ -2597,6 +2597,32 @@ fn the_flexihal_example_saves_loads_and_lists_its_machine() {
     assert_eq!(s.doc.manufacture.setups[0].post, "grblhal");
 }
 
+/// On FlexiHAL, whose A turns the table about −X with positive A clockwise seen from X+, the
+/// back of the part (+Y) comes up at A −90 and the front at A 90. An axis with an X part, or a
+/// machine without A, has no A angle.
+#[test]
+fn the_a_angle_points_a_setup_axis_up_on_flexihal() {
+    let mut s = Session::default();
+    s.run_script(&flexihal_script()).unwrap();
+    let machine = s.doc.manufacture.machine("FlexiHAL").unwrap();
+    for (axis, want) in [((0.0, 0.0, 1.0), 0.0), ((0.0, 1.0, 0.0), -90.0), ((0.0, -1.0, 0.0), 90.0), ((0.0, 0.0, -1.0), 180.0)] {
+        close(machine.a_angle(Vec3::new(axis.0, axis.1, axis.2)).unwrap(), want, 1e-9);
+    }
+    let e = machine.a_angle(Vec3::new(0.3, 0.0, 1.0)).unwrap_err();
+    assert!(e.contains("not square to the rotary axis"), "{e}");
+
+    run(
+        &mut s,
+        "cam.machine.add",
+        json!({"name": "Spindle A", "axes": [{"type": "rotary", "name": "A", "axis": [1, 0, 0], "on": "head", "pivot": [0, 0, 0]}]}),
+    );
+    close(s.doc.manufacture.machine("Spindle A").unwrap().a_angle(Vec3::new(0.0, 1.0, 0.0)).unwrap(), -90.0, 1e-9);
+
+    run(&mut s, "cam.machine.add", json!({"name": "Three axis", "axes": [{"type": "linear", "name": "Z", "min": -50, "max": 0}]}));
+    let e = s.doc.manufacture.machine("Three axis").unwrap().a_angle(Vec3::new(0.0, 0.0, 1.0)).unwrap_err();
+    assert!(e.contains("has no rotary A axis"), "{e}");
+}
+
 /// A machine is added, a setup runs on it and takes its post, and the design saves, loads and
 /// lists it with the setup on it.
 #[test]
