@@ -2223,7 +2223,7 @@ fn cam_surfaces(language: &str) -> Vec<(String, std::collections::BTreeSet<Strin
     h.app.start("cam.simulate");
     h.frames(3);
     seen.push(("simulation".into(), painted_texts(&mut h)));
-    if let Some(at) = h.widget(crate::i18n::Locale::for_language(language).label("Play the program")) {
+    if let Some(at) = h.widget(solidcraft_ui_text::Locale::for_language(language).label("Play the program")) {
         h.step(&json!({"click": at})).unwrap();
         h.frames(2);
         seen.push(("playback".into(), painted_texts(&mut h)));
@@ -2302,7 +2302,7 @@ fn the_heights_picture_lines_up_with_the_height_rows() {
         define_tool(&mut h);
         fill(&mut h, "cam.setup.create", |_| {});
         h.app.preferences.language = language.into();
-        let locale = crate::i18n::Locale::for_language(language);
+        let locale = solidcraft_ui_text::Locale::for_language(language);
         for (id, bottom) in [("cam.op.pocket", ""), ("cam.op.adaptive", "-3 mm")] {
             h.app.start(id);
             if let Some(Form::Op(op)) = &mut h.app.manufacture.form {
@@ -2312,7 +2312,7 @@ fn the_heights_picture_lines_up_with_the_height_rows() {
             let mut last = f32::NEG_INFINITY;
             for (line, label) in [("Clearance", "Clearance"), ("Retract", "Retract"), ("Top", "Top"), ("Bottom", "Bottom")] {
                 let end = crate::scenario::handle_at(&format!("cam_height:{line}")).unwrap_or_else(|| panic!("{language} {id}: no {line} line"));
-                let [x, y] = h.widget(locale.manufacture_label(label)).unwrap();
+                let [x, y] = h.widget(crate::i18n::ManufactureLabel::manufacture_label(locale, label)).unwrap();
                 let row = egui::pos2(x as f32, y as f32);
                 assert!(
                     (end.y - row.y).abs() < 3.0 && end.x < row.x && end.y > last,

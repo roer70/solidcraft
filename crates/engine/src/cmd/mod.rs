@@ -21,7 +21,7 @@ macro_rules! planned {
 }
 
 mod bom;
-mod browser;
+pub(crate) mod browser;
 pub(crate) mod cam;
 pub use cam::{
     CamPlayback, CamPreview, PreviewHeights, cam_heights, cam_list_ready, cam_origin_pick, cam_playback, cam_preview, cam_selection_heights, cam_slow,
@@ -89,8 +89,12 @@ mod point_cloud;
 mod script;
 mod section;
 pub mod settings;
+pub(crate) use clipboard::{component_path_form, copy_keys};
+pub(crate) use component::matrix::{rigid as rigid_matrix, tolerance as matrix_tolerance};
+pub(crate) use component::{base_transform, move_vector};
 pub(crate) use measure_sel::{measure_items, shape_of};
 pub(crate) use measure_shape::Shape;
+pub(crate) use script::step_params;
 #[cfg(test)]
 mod kernel_heal_tests;
 mod panels;
@@ -99,19 +103,22 @@ mod parameters;
 mod plastic;
 mod print_face;
 mod render;
+pub(crate) use render::{PreparedCapture, prepare_capture_with_metadata, render_cancel_params};
+pub(crate) use render_ui::batch_request;
 mod render_ui;
 #[cfg(test)]
 mod script_tests;
 mod sheet;
 pub(crate) use sheet::{
-    FlangeType, ThenStep, flange_edge, flange_edge_list, flange_position, flange_type, fold_points, fold_position, perforation_pattern, sheet_points,
-    sheet_rule_name, then_list,
+    FlangeType, ThenStep, bend_table_format, flange_edge, flange_edge_list, flange_position, flange_type, fold_points, fold_position,
+    perforation_pattern, sheet_points, sheet_rule_name, then_list,
 };
 mod silhouette;
 mod sketch;
 pub(crate) use sketch::author_path_for_rebind;
 pub(crate) use sketch::collapse_reason;
 pub(crate) use sketch::created as sketch_created;
+pub(crate) use sketch::{PLANE_REF_FORMS, custom_plane_form, point_arg_form};
 mod canvas_sketch;
 mod sketch_3d;
 mod sketch_canvas;
@@ -119,6 +126,8 @@ pub mod sketch_clipboard;
 mod sketch_constraints;
 mod sketch_construction;
 mod sketch_create;
+pub(crate) use sketch_create::{AT_MUST, MAX_TEXT_EDITS};
+mod sketch_divide;
 mod sketch_ends;
 mod sketch_equation;
 mod sketch_freeform;
@@ -126,6 +135,7 @@ mod sketch_import;
 mod sketch_inspect;
 mod sketch_modify;
 mod sketch_project;
+pub(crate) use sketch_project::{MAX_PROJECTED_ENTITIES, RefForm, model_ref, ref_form};
 mod sketch_store;
 mod surface;
 mod surface_analysis;
@@ -316,6 +326,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(sketch::COMMANDS.iter());
     v.extend(sketch_create::COMMANDS.iter());
     v.extend(sketch_construction::COMMANDS.iter());
+    v.extend(sketch_divide::COMMANDS.iter());
     v.extend(sketch_equation::COMMANDS.iter());
     v.extend(sketch_constraints::COMMANDS.iter());
     v.extend(sketch_import::COMMANDS.iter());

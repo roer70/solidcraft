@@ -2,8 +2,9 @@
 //! themselves draw frames, which a modal's file may not).
 
 use crate::SolveApp;
-use crate::i18n::{format as tf, tr_manufacture as tm};
+use crate::i18n::tr_manufacture as tm;
 use crate::ui_kit;
+use solidcraft_ui_text::format as tf;
 
 use super::pick_post;
 

@@ -12,9 +12,10 @@ use solidcore_record::Vec3;
 use solidcraft_engine::geom::prelude::*;
 
 use crate::SolveApp;
-use crate::i18n::{format as tf, tr_manufacture as tm};
-use crate::theme::Tokens;
+use crate::i18n::tr_manufacture as tm;
 use crate::viewport::Proj;
+use solidcraft_theme::Tokens;
+use solidcraft_ui_text::format as tf;
 
 const TOOL_KINDS: [&str; 7] = ["flat", "ball", "drill", "vbit", "bull", "chamfer", "engraver"];
 /// What each of [`TOOL_KINDS`] is called in the tool assistant.
@@ -1195,7 +1196,7 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
 /// The command a form stands for. Fields left empty are left to the command's defaults.
 pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
     // A decimal point or a decimal comma, whatever the language (#1347).
-    let number = |what: &str, s: &str| crate::prefs::parse_number(s).ok_or_else(|| tf("manufacture.must_be_a_number", &[("what", tm(what))]));
+    let number = |what: &str, s: &str| crate::ui_kit::parse_number(s).ok_or_else(|| tf("manufacture.must_be_a_number", &[("what", tm(what))]));
     let mut p = serde_json::Map::new();
     fn optional(p: &mut serde_json::Map<String, Value>, k: &str, s: &str) {
         if !s.trim().is_empty() {
@@ -1922,7 +1923,7 @@ pub fn edit_form(app: &SolveApp, setup: &Value, op: &Value) -> Option<Form> {
 
 /// Says in the Tool Library window what an import took and what it left out.
 pub fn imported(app: &mut SolveApp, result: Result<Value, String>) {
-    let _language = crate::i18n::scope(&app.preferences.language);
+    let _language = solidcraft_ui_text::scope(&app.preferences.language);
     match result {
         Ok(v) => {
             let count = |k: &str| v[k].as_array().map_or(0, Vec::len);
@@ -2205,7 +2206,7 @@ fn previewed_op(cam: &CamUi) -> Option<u64> {
 
 /// Simulates the first setup (what the toolbar's Simulate does).
 pub fn simulate(app: &mut SolveApp) {
-    let _language = crate::i18n::scope(&app.preferences.language);
+    let _language = solidcraft_ui_text::scope(&app.preferences.language);
     match app.session.doc.manufacture.setups.first().map(|s| s.id) {
         Some(setup) => simulate_setup(app, setup),
         None => app.manufacture.error = Some(tm("There is no setup to simulate").into()),
@@ -2252,7 +2253,7 @@ impl SimScope {
 
 /// Simulates a setup: the operations shown in the browser (a hidden one is left out), or every one.
 pub fn simulate_setup(app: &mut SolveApp, setup: u64) {
-    let _language = crate::i18n::scope(&app.preferences.language);
+    let _language = solidcraft_ui_text::scope(&app.preferences.language);
     let Some(s) = app.session.doc.manufacture.setups.iter().find(|s| s.id == setup) else { return };
     let ids: Vec<u64> = s.operations.iter().map(|o| o.id).collect();
     let shown: Vec<u64> = ids.iter().copied().filter(|id| !app.manufacture.hidden.contains(id)).collect();
@@ -2271,7 +2272,7 @@ pub fn simulate_setup(app: &mut SolveApp, setup: u64) {
 
 /// Simulates one operation on the stock the operations before it leave.
 pub fn simulate_op(app: &mut SolveApp, setup: u64, op: u64) {
-    let _language = crate::i18n::scope(&app.preferences.language);
+    let _language = solidcraft_ui_text::scope(&app.preferences.language);
     let Some(s) = app.session.doc.manufacture.setups.iter().find(|s| s.id == setup) else { return };
     let Some(at) = s.operations.iter().position(|o| o.id == op) else { return };
     let first: Vec<u64> = s.operations.iter().take(at).map(|o| o.id).collect();
@@ -2284,7 +2285,7 @@ pub fn simulate_op(app: &mut SolveApp, setup: u64, op: u64) {
 /// Simulates the open operation form as it stands, on a copy of the design (the form stays
 /// open, not applied), on the stock the operations before it leave.
 pub fn simulate_form(app: &mut SolveApp) {
-    let _language = crate::i18n::scope(&app.preferences.language);
+    let _language = solidcraft_ui_text::scope(&app.preferences.language);
     let Some(form) = app.manufacture.form.clone() else { return };
     let Form::Op(f) = &form else { return };
     let made = command(&form).and_then(|(cmd, p)| {
@@ -2352,7 +2353,7 @@ fn simulation_arrived(app: &mut SolveApp) {
     let current = *revision == app.session.revision;
     app.manufacture.sim_job = None;
     if current {
-        let _language = crate::i18n::scope(&app.preferences.language);
+        let _language = solidcraft_ui_text::scope(&app.preferences.language);
         simulated(app, result);
     }
     app.manufacture.simulating = None;
@@ -3446,7 +3447,7 @@ fn shown(v: f64, decimals: usize) -> String {
 }
 
 fn parsed(s: &str) -> Option<f64> {
-    crate::prefs::parse_number(s).filter(|v| *v > 0.0)
+    crate::ui_kit::parse_number(s).filter(|v| *v > 0.0)
 }
 
 /// Which of a tool's speed and feed rows were typed in.
@@ -3754,7 +3755,7 @@ struct ToolShape {
 impl ToolShape {
     fn of(f: &ToolForm) -> ToolShape {
         let mm =
-            |s: &str| crate::prefs::parse_number(s.trim().trim_end_matches("mm").trim_end_matches("deg").trim_end_matches('°')).filter(|v| *v > 0.0);
+            |s: &str| crate::ui_kit::parse_number(s.trim().trim_end_matches("mm").trim_end_matches("deg").trim_end_matches('°')).filter(|v| *v > 0.0);
         let shape = ToolShape::with(
             f.kind,
             mm(&f.diameter),
@@ -4122,7 +4123,7 @@ fn face_roles_rows(ui: &mut egui::Ui, f: &mut OpForm, selected: &[(String, Vec3)
     if selected.is_empty() {
         return;
     }
-    let given = |text: &str| crate::prefs::parse_number(text.trim().trim_end_matches("mm").trim()).filter(|v| *v >= 0.0 && *v <= 100.0);
+    let given = |text: &str| crate::ui_kit::parse_number(text.trim().trim_end_matches("mm").trim()).filter(|v| *v >= 0.0 && *v <= 100.0);
     let clearance = if f.role_clearance.trim().is_empty() { Some(1.0) } else { given(&f.role_clearance) };
     let leave = given(&f.role_leave);
     let mut chosen: Option<(FaceRoleKind, f64)> = None;
@@ -4711,10 +4712,10 @@ fn form_title(form: &Form) -> (&'static str, String) {
     let title = match form {
         Form::Tool(f) if !f.editing => tm("New Tool").to_string(),
         Form::Setup(f) if f.editing.is_none() => {
-            spec.as_ref().map_or_else(|| tm(form_heading(form)).to_string(), |s| crate::i18n::tr_label(s.label).to_string())
+            spec.as_ref().map_or_else(|| tm(form_heading(form)).to_string(), |s| solidcraft_ui_text::tr_label(s.label).to_string())
         }
         Form::Op(f) if f.editing.is_none() => {
-            spec.as_ref().map_or_else(|| tm(form_heading(form)).to_string(), |s| crate::i18n::tr_label(s.label).to_string())
+            spec.as_ref().map_or_else(|| tm(form_heading(form)).to_string(), |s| solidcraft_ui_text::tr_label(s.label).to_string())
         }
         _ => tm(form_heading(form)).to_string(),
     };
@@ -4734,7 +4735,7 @@ fn form_card(
     lists: &Choices,
     docked: egui::Pos2,
     bounds: egui::Rect,
-    layout: crate::shell::LayoutMode,
+    layout: crate::ui_kit::LayoutMode,
     esc_taken: bool,
     asked: &mut Asked,
 ) -> (Option<egui::Rect>, bool) {
@@ -4848,7 +4849,7 @@ const LABEL_GROWTH: f32 = 1.6;
 struct Dock {
     anchor: egui::Pos2,
     bounds: egui::Rect,
-    layout: crate::shell::LayoutMode,
+    layout: crate::ui_kit::LayoutMode,
 }
 
 /// A panel as the app's managers are (`ui_kit::Panel::feature_collapsible`, as Parameters):
@@ -4894,7 +4895,7 @@ fn overview_card(
 /// A command's icon and its name in this language, for the card that shows it.
 fn command_heading(command: &str) -> (&'static str, String) {
     let spec = solidcraft_engine::find_command(command);
-    (spec.as_ref().map_or("", |s| s.icon), spec.as_ref().map_or_else(String::new, |s| crate::i18n::tr_label(s.label).to_string()))
+    (spec.as_ref().map_or("", |s| s.icon), spec.as_ref().map_or_else(String::new, |s| solidcraft_ui_text::tr_label(s.label).to_string()))
 }
 
 /// The Manufacture panel's id.
@@ -4968,7 +4969,7 @@ fn engine_text(w: &str) -> String {
 /// `op_kind` or `tool_kind`, since a drill is a tool as well as an operation.
 fn kind_name(group: &str, kind: &str) -> String {
     let id = format!("manufacture.{group}_{kind}");
-    match crate::i18n::tr(&id) {
+    match solidcraft_ui_text::tr(&id) {
         known if known != id => known.to_string(),
         _ => kind.replace('_', " "),
     }
@@ -5040,7 +5041,7 @@ fn steps(ui: &mut egui::Ui, cam: &CamUi, setups: &[Value], asked: &mut Asked) {
                 crate::ui_kit::Container::new(ui.ctx(), crate::ui_kit::Surface::Feature).menu(&r).show(|ui| {
                     for cmd in OPERATIONS {
                         // The toolbar's own name for it.
-                        if button(ui, crate::i18n::tr(&format!("cmd.{}", cmd.replace('.', "_"))), Button::Normal).clicked() {
+                        if button(ui, solidcraft_ui_text::tr(&format!("cmd.{}", cmd.replace('.', "_"))), Button::Normal).clicked() {
                             asked.start = Some(cmd);
                         }
                     }
@@ -5620,7 +5621,7 @@ fn answer(app: &mut SolveApp, mut asked: Asked) {
         && (asked.save_default || asked.forget_default)
     {
         let kind = f.kind.command();
-        let title = crate::i18n::tr(&format!("cmd.{}", kind.replace('.', "_"))).to_string();
+        let title = solidcraft_ui_text::tr(&format!("cmd.{}", kind.replace('.', "_"))).to_string();
         if asked.save_default {
             app.preferences.cam_op_defaults.insert(kind.to_string(), remembered(f));
             app.set_status(tf("manufacture.default_saved", &[("kind", &title)]), false);
@@ -5914,16 +5915,16 @@ fn toggle_hidden(app: &mut SolveApp, id: u64) {
 }
 
 /// A menu entry that `menu_action` does: `what` to the setup, or to one operation of it.
-fn menu_item(label: &str, icon: &str, what: &str, setup: u64, op: Option<u64>) -> crate::context_menu::Item {
-    let mut item = crate::context_menu::Item::action("ui.cam", tm(label), icon);
+fn menu_item(label: &str, icon: &str, what: &str, setup: u64, op: Option<u64>) -> crate::ui_kit::Item {
+    let mut item = crate::ui_kit::Item::action("ui.cam", tm(label), icon);
     item.params = Some(json!({ "do": what, "setup": setup, "op": op }));
     item
 }
 
 /// The menu of the browser's Manufacture folder: what the 3D view shows of the toolpaths, the
 /// stock and the setups, and how toolpaths are drawn (as the Preferences' Manufacture section).
-pub fn folder_menu_items(app: &SolveApp) -> Vec<crate::context_menu::Item> {
-    use crate::context_menu::Item;
+pub fn folder_menu_items(app: &SolveApp) -> Vec<crate::ui_kit::Item> {
+    use crate::ui_kit::Item;
     let cam = &app.manufacture;
     let prefs = &app.preferences;
     let entry = |label: &str, what: &str, index: Option<usize>, on: bool| {
@@ -5976,8 +5977,8 @@ pub fn preferences(app: &mut SolveApp, ui: &mut egui::Ui) {
 }
 
 /// The menu of a setup, or of one operation of it, in the browser.
-pub fn menu_items(app: &SolveApp, setup: u64, op: Option<u64>) -> Vec<crate::context_menu::Item> {
-    use crate::context_menu::Item;
+pub fn menu_items(app: &SolveApp, setup: u64, op: Option<u64>) -> Vec<crate::ui_kit::Item> {
+    use crate::ui_kit::Item;
     let Some(s) = app.session.doc.manufacture.setups.iter().find(|s| s.id == setup) else { return Vec::new() };
     let ops: Vec<u64> = s.operations.iter().map(|o| o.id).collect();
     let disable = |mut item: Item, on: bool| {
@@ -6115,7 +6116,7 @@ pub fn menu_action(app: &mut SolveApp, p: &Value) {
 
 /// Writes a setup's program, or one operation of it, to `path`.
 pub fn post_to(app: &mut SolveApp, setup: u64, op: Option<u64>, path: &str) {
-    let _language = crate::i18n::scope(&app.preferences.language);
+    let _language = solidcraft_ui_text::scope(&app.preferences.language);
     let cam = &app.manufacture;
     let air = if cam.air_cut { cam.air_height } else { 0.0 };
     let mut p = json!({
