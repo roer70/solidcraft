@@ -334,6 +334,10 @@ pub enum SetupOrigin {
         #[serde(default)]
         z: OriginZ,
     },
+    /// The work origin of the setup whose clamping it stays in (`Setup::same_clamping`): the
+    /// part only turns with A about it, so both share one work offset. That setup's origin
+    /// must be on the A axis.
+    Clamping,
 }
 
 /// Which point of an edge.

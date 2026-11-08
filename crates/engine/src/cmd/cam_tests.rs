@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use solidcore_record::Vec3;
 use solidcraft_cam::{Move, Toolpath};
+use solidcraft_doc::manufacture::SetupOrigin;
 use solidcraft_geom::prelude::*;
 
 use crate::Session;
@@ -2633,11 +2634,7 @@ fn a_setup_in_the_same_clamping_is_turned_with_a_not_clamped_again() {
     run(&mut s, "cam.machine.add", flexihal());
     let top = json!({"of": "stock", "x": "min", "y": "min", "z": "max"});
     run(&mut s, "cam.setup.create", json!({"name": "Top", "origin": top, "machine": "FlexiHAL"}));
-    run(
-        &mut s,
-        "cam.setup.create",
-        json!({"name": "Bottom", "axis": "-z", "origin": top, "machine": "FlexiHAL", "stock_from": "Top", "same_clamping": true}),
-    );
+    run(&mut s, "cam.setup.create", json!({"name": "Bottom", "axis": "-z", "machine": "FlexiHAL", "stock_from": "Top", "same_clamping": true}));
     run(&mut s, "cam.setup.create", json!({"name": "Flipped", "axis": "-z", "origin": top, "stock_from": "Top"}));
     let sheet = |s: &mut Session, name: &str| run(s, "cam.sheet", json!({"setup": name}))["text"].as_str().unwrap().to_string();
 
@@ -2662,6 +2659,72 @@ fn a_setup_in_the_same_clamping_is_turned_with_a_not_clamped_again() {
     run(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "stock_from": "Top", "same_clamping": true}));
     run(&mut s, "cam.setup.remove", json!({"setup": "Top"}));
     assert!(s.doc.manufacture.setups.iter().all(|x| x.stock_from.is_none() && !x.same_clamping));
+}
+
+/// A setup in an earlier one's clamping has that one's origin and work offset, and follows it
+/// when it changes: A0 and A180 share G55. The first one's sheet puts Y and Z zero on FlexiHAL's
+/// A centre. Out of the clamping the work zero stays where it was, and a damaged chain is an
+/// error, never a hang.
+#[test]
+fn a_setup_in_the_same_clamping_shares_the_origin_on_the_a_axis() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));
+    run(&mut s, "cam.machine.add", flexihal());
+    let centre = json!({"of": "stock", "x": "min", "y": "center", "z": "center"});
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "origin": centre, "machine": "FlexiHAL", "work_offset": 55}));
+    run(&mut s, "cam.setup.create", json!({"name": "Bottom", "axis": "-z", "machine": "FlexiHAL", "stock_from": "Top", "same_clamping": true}));
+    let bottom = &s.doc.manufacture.setups[1];
+    assert_eq!((&bottom.origin, bottom.work_offset), (&SetupOrigin::Clamping, 55));
+    let origins = |s: &mut Session| {
+        let listed = run(s, "cam.list", json!({}));
+        (listed["setups"][0]["frame"]["origin"].clone(), listed["setups"][1]["frame"]["origin"].clone())
+    };
+    let (top, bottom) = origins(&mut s);
+    assert_eq!(top, bottom);
+
+    let sheet = |s: &mut Session, name: &str| run(s, "cam.sheet", json!({"setup": name}))["text"].as_str().unwrap().to_string();
+    let first = sheet(&mut s, "Top");
+    assert!(first.contains("- Y and Z zero on the A axis centre (machine Y-723 Z-98.08, from the machine's definition)"), "{first}");
+    let second = sheet(&mut s, "Bottom");
+    assert!(second.contains("- Work zero G55: the same as the setup whose clamping it stays in"), "{second}");
+    assert!(!second.contains("A axis centre"), "{second}");
+
+    // It follows the first's work offset and origin.
+    run(&mut s, "cam.setup.edit", json!({"setup": "Top", "work_offset": 57, "origin": [5, 20, 5]}));
+    assert_eq!(s.doc.manufacture.setups[1].work_offset, 57);
+    let (top, bottom) = origins(&mut s);
+    assert_eq!((top.clone(), bottom), (json!([5.0, 20.0, 5.0]), top));
+
+    s.doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into();
+    assert_eq!(s.doc.manufacture.setups[1].origin, SetupOrigin::Clamping);
+
+    let refused = |s: &mut Session, id: &str, p: Value, says: &str| {
+        let before = s.doc.manufacture.clone();
+        let e = s.execute(id, &p).err().unwrap_or_else(|| panic!("{id} {p} was accepted")).to_string();
+        assert!(e.contains(says), "{id} {p}: {e}");
+        assert_eq!(s.doc.manufacture, before, "{id} {p} changed the design");
+    };
+    refused(&mut s, "cam.setup.create", json!({"stock_from": "Top", "same_clamping": true, "origin": [1, 2, 3]}), "origin \"clamping\"");
+    refused(&mut s, "cam.setup.create", json!({"origin": "clamping"}), "needs same_clamping");
+    refused(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "work_offset": 56}), "shares its work offset G57");
+    refused(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "origin": [0, 0, 0]}), "origin \"clamping\"");
+
+    // Out of the clamping, its work zero stays where it was.
+    run(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "same_clamping": false}));
+    assert_eq!(s.doc.manufacture.setups[1].origin, SetupOrigin::Point { at: Vec3::new(5.0, 20.0, 5.0) });
+    run(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "same_clamping": true}));
+    run(&mut s, "cam.setup.remove", json!({"setup": "Top"}));
+    assert_eq!(s.doc.manufacture.setups[0].origin, SetupOrigin::Point { at: Vec3::new(5.0, 20.0, 5.0) });
+
+    // A damaged design whose clamping runs round in a circle.
+    run(&mut s, "cam.setup.create", json!({"name": "Other", "origin": [0, 0, 0]}));
+    let ids: Vec<u64> = s.doc.manufacture.setups.iter().map(|x| x.id).collect();
+    for (k, from) in [(0, ids[1]), (1, ids[0])] {
+        let x = &mut s.doc_mut().manufacture.setups[k];
+        (x.origin, x.same_clamping, x.stock_from) = (SetupOrigin::Clamping, true, Some(from));
+    }
+    let e = s.execute("cam.sheet", &json!({"setup": "Other"})).unwrap_err().to_string();
+    assert!(e.contains("goes round in a circle"), "{e}");
 }
 
 /// A machine is added, a setup runs on it and takes its post, and the design saves, loads and

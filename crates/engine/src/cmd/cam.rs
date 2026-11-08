@@ -24,7 +24,7 @@ use crate::schema::cam::{
 };
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session, toollib};
-use solidcraft_doc::manufacture::{MAX_MACHINES, Machine};
+use solidcraft_doc::manufacture::{AxisName, MAX_MACHINES, Machine, MachineAxis};
 
 const MACHINE_ADD_CONTRACT: TypedContract<MachineAddParams> = TypedContract::new();
 const MACHINE_EDIT_CONTRACT: TypedContract<MachineEditParams> = TypedContract::new();
@@ -69,12 +69,13 @@ const SETUP_DOC: &str = "name?; axis?: +x|-x|+y|-y|+z|-z or [x, y, z], the direc
      the object: the stock's top at its lowest X and Y; default without `origin`: the world origin), or {edge: [x, y, z] a point on a body's edge \
      or a vertex, body?, on?: vertex|middle|center (the end nearest the point, halfway along, or the centre of its circle; default: vertex at an \
      end, else center on a round edge, else middle), z?: point | {of?: stock|part, z?: min|center|max} (default: the stock's top)}: across the \
-     tool axis at that point of the edge, which it follows as the design changes; post?: rs274|grbl|grblhal|lnc|lnc_atc (default \
+     tool axis at that point of the edge, which it follows as the design changes, or \"clamping\": the origin of the setup whose clamping it \
+     stays in (only with same_clamping, and its default there); post?: rs274|grbl|grblhal|lnc|lnc_atc (default \
      rs274, or the machine's); machine?: the machine it runs on, by name (cam.machine.add; null: none, a generic three-axis mill); \
      material?: what the stock is made of (operations take their tool's cutting data for it; null: none); work_offset?: G54 to G59 \
      (or 54 to 59; default G54), the work offset its programs run in; stock_from?: an earlier setup (id or name; null: none) whose result \
      is the stock, its tool axis the same or turned over (the part turned over about the world X axis for a setup from -z); same_clamping?: true when the part stays clamped as for stock_from's setup and is only turned with \
-     A, so its sheet asks for no new clamping (needs stock_from; default false); x_axis?: the setup's X direction across its \
+     A, so its sheet asks for no new clamping; it shares that setup's origin and work offset (needs stock_from; default false); x_axis?: the setup's X direction across its \
      axis, as axis is given (default: worked out from the axis; from -z, +x turns the part about X and -x about Y); clamps?: \
      [{name?, min: [x, y], max: [x, y], top}] boxes in work coordinates no tool may enter (operations that do are warned about); copies?: \
      {nx, ny, dx, dy}: copies of the part in rows along X and columns along Y, dx and dy apart, each cut by every operation (null: one) → setup: id, name";
@@ -1126,10 +1127,7 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         Some(n) => n,
         None => (setups.len() + 1..).map(|k| format!("Setup{k}")).find(|n| !setups.iter().any(|x| x.name == *n)).unwrap_or_default(),
     };
-    let origin = match p.get("origin") {
-        Some(v) => origin_param(s, v, cmd)?,
-        None => SetupOrigin::Point { at: Vec3::ZERO },
-    };
+    let origin = p.get("origin").map(|v| origin_param(s, v, cmd)).transpose()?;
     let axis = match p.get("axis") {
         Some(v) => axis_param(v, cmd)?,
         None => Vec3::new(0.0, 0.0, 1.0),
@@ -1143,12 +1141,15 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
     let post = str_(p, "post").or(machine_post.as_deref()).unwrap_or("rs274");
     let post = Post::builtin(post).ok_or_else(|| bad(cmd, format!("unknown post `{post}` (known: {})", Post::BUILTIN.join(", "))))?.name;
     let material = material_param(p, cmd)?.flatten();
-    let work_offset = work_offset_param(p, cmd)?.unwrap_or(54);
     let stock_from = stock_from_param(s, p, None, axis, cmd)?.flatten();
     let same_clamping = same_clamping_param(p, cmd)?.unwrap_or(false);
     if same_clamping && stock_from.is_none() {
         return Err(bad(cmd, SAME_CLAMPING_NEEDS_STOCK_FROM));
     }
+    // In an earlier setup's clamping, its origin and work offset unless the call gives them.
+    let kept_in = stock_from.filter(|_| same_clamping).and_then(|id| s.doc.manufacture.setups.iter().find(|x| x.id == id));
+    let origin = origin.unwrap_or(if same_clamping { SetupOrigin::Clamping } else { SetupOrigin::Point { at: Vec3::ZERO } });
+    let work_offset = work_offset_param(p, cmd)?.or(kept_in.map(|x| x.work_offset)).unwrap_or(54);
     let x_axis = x_axis_param(p, cmd)?.flatten();
     let clamps = clamps_param(p, cmd)?.unwrap_or_default();
     let copies = copies_param(p, cmd)?.flatten();
@@ -1236,6 +1237,22 @@ fn setup_edit(s: &mut Session, p: &Value) -> Result<Value> {
     if setup.same_clamping && setup.stock_from.is_none() {
         return Err(bad(cmd, SAME_CLAMPING_NEEDS_STOCK_FROM));
     }
+    // Into a clamping it takes that setup's origin and work offset; out of one, its work zero
+    // stays where it was, as a point. What the call gives wins.
+    let was = s.doc.manufacture.setups.get(i).and_then(|x| resolve(s, x).ok()).map(|r| r.frame.o);
+    if p.get("origin").is_none() {
+        match (setup.same_clamping, &setup.origin) {
+            (true, o) if *o != SetupOrigin::Clamping => setup.origin = SetupOrigin::Clamping,
+            (false, SetupOrigin::Clamping) => setup.origin = SetupOrigin::Point { at: was.unwrap_or(Vec3::ZERO) },
+            _ => {}
+        }
+    }
+    if setup.same_clamping
+        && p.get("work_offset").is_none()
+        && let Some(earlier) = setup.stock_from.and_then(|id| s.doc.manufacture.setups.iter().find(|x| x.id == id))
+    {
+        setup.work_offset = earlier.work_offset;
+    }
     if let Some(clamps) = clamps_param(p, cmd)? {
         setup.clamps = clamps;
     }
@@ -1257,10 +1274,27 @@ fn setup_edit(s: &mut Session, p: &Value) -> Result<Value> {
     }
     resolve(s, &setup).map_err(|e| bad(cmd, e))?;
     let (id, name) = (setup.id, setup.name.clone());
-    if let Some(slot) = s.doc_mut().manufacture.setups.get_mut(i) {
+    let setups = &mut s.doc_mut().manufacture.setups;
+    if let Some(slot) = setups.get_mut(i) {
         *slot = setup;
     }
+    follow_clamping_offsets(setups);
     Ok(json!({ "setup": id, "name": name }))
+}
+
+/// Gives each setup that stays in an earlier one's clamping that setup's work offset: they share
+/// one work zero. In list order, so a chain of them follows its first.
+fn follow_clamping_offsets(setups: &mut [Setup]) {
+    for k in 0..setups.len() {
+        let Some(from) = setups.get(k).filter(|x| x.same_clamping).and_then(|x| x.stock_from) else {
+            continue;
+        };
+        if let Some(offset) = setups.iter().find(|x| x.id == from).map(|x| x.work_offset)
+            && let Some(later) = setups.get_mut(k)
+        {
+            later.work_offset = offset;
+        }
+    }
 }
 
 /// `machine`: a machine of the design by name, ignoring case (`null`: none).
@@ -1390,8 +1424,12 @@ fn axis_param(v: &Value, cmd: &str) -> Result<Vec3> {
 }
 
 /// The work origin from a world point `[x, y, z]`, `{of?: stock|part, x?, y?, z?: min|center|max}`
-/// or `{edge: [x, y, z], body?, on?: vertex|middle|center, z?: point | {of?, z?}}`.
+/// or `{edge: [x, y, z], body?, on?: vertex|middle|center, z?: point | {of?, z?}}`, or `"clamping"`:
+/// the origin of the setup whose clamping it stays in.
 fn origin_param(s: &Session, v: &Value, cmd: &str) -> Result<SetupOrigin> {
+    if v.as_str().is_some_and(|t| t.trim().eq_ignore_ascii_case("clamping")) {
+        return Ok(SetupOrigin::Clamping);
+    }
     if let Some(at) = vec3(v).filter(|o| o.x.abs() <= 1e6 && o.y.abs() <= 1e6 && o.z.abs() <= 1e6) {
         return Ok(SetupOrigin::Point { at });
     }
@@ -1399,7 +1437,7 @@ fn origin_param(s: &Session, v: &Value, cmd: &str) -> Result<SetupOrigin> {
         bad(
             cmd,
             "`origin` must be [x, y, z], {of?: stock|part, x?, y?, z?: min|center|max} or {edge: [x, y, z], body?, on?: vertex|middle|center, \
-             z?: point | {of?: stock|part, z?: min|center|max}} (default: the stock's top, at its lowest X and Y)",
+             z?: point | {of?: stock|part, z?: min|center|max}} or \"clamping\" (default: the stock's top, at its lowest X and Y)",
         )
     };
     let o = v.as_object().ok_or_else(wrong)?;
@@ -1753,6 +1791,17 @@ fn resolve(s: &Session, setup: &Setup) -> std::result::Result<Resolved, String> 
         Anchor::Max => hi,
     };
     let o = match &setup.origin {
+        SetupOrigin::Clamping => {
+            let first = clamping_first(s, setup)?;
+            if first.work_offset != setup.work_offset {
+                return Err(format!(
+                    "a setup in {}'s clamping shares its work offset G{}, not G{}",
+                    first.name, first.work_offset, setup.work_offset
+                ));
+            }
+            resolve(s, first)?.frame.o
+        }
+        _ if setup.same_clamping => return Err("a setup in the same clamping has the origin of the one it stays in: origin \"clamping\"".into()),
         SetupOrigin::Point { at } => *at,
         SetupOrigin::Box { of, x: ax, y: ay, z: az } => {
             let (lo, hi) = boxed(of)?;
@@ -1792,6 +1841,27 @@ fn resolve(s: &Session, setup: &Setup) -> std::result::Result<Resolved, String> 
         fixtures: setup.fixtures.clone(),
         copies,
     })
+}
+
+/// The first setup of the clamping `setup` stays in: back along `stock_from` while the origin
+/// is the clamping's. An error when the chain breaks off or runs round (a damaged design).
+fn clamping_first<'a>(s: &'a Session, setup: &'a Setup) -> std::result::Result<&'a Setup, String> {
+    let setups = &s.doc.manufacture.setups;
+    let mut at = setup;
+    for _ in 0..=setups.len() {
+        if at.origin != SetupOrigin::Clamping {
+            return Ok(at);
+        }
+        if !at.same_clamping {
+            return Err(format!("setup {} has the origin of a clamping it is not in: it needs same_clamping", at.name));
+        }
+        let from = at.stock_from.ok_or(SAME_CLAMPING_NEEDS_STOCK_FROM)?;
+        at = setups
+            .iter()
+            .find(|x| x.id == from)
+            .ok_or_else(|| format!("setup {} stays in the clamping of a setup the design no longer has", at.name))?;
+    }
+    Err("the setups' clamping goes round in a circle".into())
 }
 
 /// How many tools a setup's program loads: one for its first operation, and one each time the
@@ -1923,6 +1993,16 @@ fn setup_remove(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`setup` is required"));
     }
     let i = setup_index(s, p, cmd)?;
+    // Where the work zero is of each setup that took its origin from it: it stays there.
+    let gone = s.doc.manufacture.setups.get(i).map(|x| x.id);
+    let zeros: Vec<(u64, Option<Vec3>)> = s
+        .doc
+        .manufacture
+        .setups
+        .iter()
+        .filter(|x| x.origin == SetupOrigin::Clamping && x.stock_from.is_some() && x.stock_from == gone)
+        .map(|x| (x.id, resolve(s, x).ok().map(|r| r.frame.o)))
+        .collect();
     let doc = s.doc_mut();
     let removed = doc.manufacture.setups.remove(i);
     // Setups that took their stock from it start from their own stock box again.
@@ -1930,6 +2010,9 @@ fn setup_remove(s: &mut Session, p: &Value) -> Result<Value> {
         if later.stock_from == Some(removed.id) {
             later.stock_from = None;
             later.same_clamping = false;
+            if let Some((_, at)) = zeros.iter().find(|(id, _)| *id == later.id) {
+                later.origin = SetupOrigin::Point { at: at.unwrap_or(Vec3::ZERO) };
+            }
         }
     }
     Ok(json!({ "removed": removed.id, "name": removed.name }))
@@ -4476,15 +4559,15 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The comment lines at the top of a program, for checking it at the machine: the stock and
 /// where its top and bottom are, where the work zero is, the tools and the cutting time.
-/// `clamping`: the note for a setup that stays in an earlier one's clamping ([`clamping_note`]).
-fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: f64, clamping: Option<String>) -> Vec<String> {
+/// `clamping`: what it says of the setup's clamping ([`clamping_notes`]).
+fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: f64, clamping: Vec<String>) -> Vec<String> {
     let mm = |v: f64| {
         let t = format!("{:.3}", v + 0.0);
         let t = t.trim_end_matches('0').trim_end_matches('.').to_string();
         if t == "-0" { "0".to_string() } else { t }
     };
     let mut notes = Vec::new();
-    let kept = clamping.is_some();
+    let kept = setup.same_clamping;
     notes.extend(clamping);
     if let (Some((lo, hi)), Some((c, r))) = (at.stock, at.round) {
         notes.push(format!(
@@ -4517,6 +4600,7 @@ fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: 
             let (x, y, z) = (side(*x, "left", "right"), side(*y, "front", "back"), side(*z, "bottom", "top"));
             format!("Work zero G{}: {of} box, X {x}, Y {y}, Z {z}", setup.work_offset)
         }
+        SetupOrigin::Clamping => format!("Work zero G{}: the same as the setup whose clamping it stays in", setup.work_offset),
         SetupOrigin::Point { at } => format!("Work zero G{}: the world point {}, {}, {}", setup.work_offset, mm(at.x), mm(at.y), mm(at.z)),
         SetupOrigin::Edge { body, on, z, .. } => {
             let on = match on {
@@ -4567,23 +4651,35 @@ fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: 
     notes
 }
 
-/// For a setup that stays in an earlier one's clamping: that the part is left clamped and only
-/// turned with A, and to what angle when its machine has a rotary A that reaches the tool axis.
-fn clamping_note(s: &Session, setup: &Setup) -> Option<String> {
-    if !setup.same_clamping {
-        return None;
-    }
-    let earlier = setup.stock_from.and_then(|id| s.doc.manufacture.setups.iter().find(|x| x.id == id))?;
-    let angle = setup.machine.as_deref().and_then(|m| s.doc.manufacture.machine(m)).and_then(|m| m.a_angle(setup.axis).ok());
-    let turn = match angle {
-        Some(a) => {
-            let a = format!("{:.3}", a + 0.0);
-            let a = a.trim_end_matches('0').trim_end_matches('.');
-            format!("turn A to {}°", if a == "-0" { "0" } else { a })
-        }
-        None => "turn it with A".to_string(),
+/// What a setup's notes say of its clamping. One that stays in an earlier one's: the part is
+/// left clamped and only turned with A, to what angle when its machine has a rotary A that
+/// reaches the tool axis. The first of a clamping others stay in: its work zero must be on the
+/// A axis, with where A's centre is when the machine has one about X.
+fn clamping_notes(s: &Session, setup: &Setup) -> Vec<String> {
+    let mm = |v: f64| {
+        let t = format!("{:.3}", v + 0.0);
+        let t = t.trim_end_matches('0').trim_end_matches('.').to_string();
+        if t == "-0" { "0".to_string() } else { t }
     };
-    Some(format!("Same clamping as {}: leave the part clamped, {turn}", earlier.name))
+    let machine = setup.machine.as_deref().and_then(|m| s.doc.manufacture.machine(m));
+    let setups = &s.doc.manufacture.setups;
+    if setup.same_clamping {
+        let Some(earlier) = setup.stock_from.and_then(|id| setups.iter().find(|x| x.id == id)) else {
+            return Vec::new();
+        };
+        let turn = machine.and_then(|m| m.a_angle(setup.axis).ok()).map_or_else(|| "turn it with A".to_string(), |a| format!("turn A to {}°", mm(a)));
+        return vec![format!("Same clamping as {}: leave the part clamped, {turn}", earlier.name)];
+    }
+    if !setups.iter().any(|x| x.same_clamping && x.stock_from == Some(setup.id)) {
+        return Vec::new();
+    }
+    let centre = machine.and_then(|m| m.axis(AxisName::A)).and_then(|a| match a {
+        MachineAxis::Rotary { axis, pivot, .. } if axis.y.abs() < 1e-9 && axis.z.abs() < 1e-9 => {
+            Some(format!(" (machine Y{} Z{}, from the machine's definition)", mm(pivot.y), mm(pivot.z)))
+        }
+        _ => None,
+    });
+    vec![format!("Y and Z zero on the A axis centre{}: the setups in this clamping turn about it", centre.unwrap_or_default())]
 }
 
 /// A setup's sheet for the machine, in Markdown: what to clamp and where the zero is, the
@@ -4622,7 +4718,7 @@ fn sheet(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     let minutes: f64 = ops.iter().filter_map(|o| o["toolpath"]["cut_minutes"].as_f64()).sum();
-    for note in program_notes(&setup, &at, &programs, minutes, clamping_note(s, &setup)) {
+    for note in program_notes(&setup, &at, &programs, minutes, clamping_notes(s, &setup)) {
         out.push(format!("- {}", cell(&note)));
     }
     out.push(format!("- Post: {}", cell(&setup.post)));
@@ -4735,7 +4831,7 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
         let tool = s.doc.manufacture.tool(op.tool).cloned().ok_or_else(|| bad(cmd, format!("no tool {}", op.tool)))?;
         program.operations.push(cam::Operation { name: op.name.clone(), tool, spindle_rpm: op.spindle_rpm, coolant: op.coolant, path });
     }
-    program.notes = program_notes(setup, &at, &program.operations, minutes, clamping_note(s, setup));
+    program.notes = program_notes(setup, &at, &program.operations, minutes, clamping_notes(s, setup));
     let text = cam::emit(&program, &post).map_err(cam_error)?;
     let mut out = json!({"lines": text.lines().count(), "extension": post.extension, "post": post.name, "cut_minutes": minutes});
     match str_(p, "path") {
