@@ -2588,10 +2588,10 @@ fn the_flexihal_example_saves_loads_and_lists_its_machine() {
     assert_eq!(
         listed["machines"],
         json!([{"name": "FlexiHAL", "post": "grblhal", "setups": ["Top"], "axes": [
-            {"type": "rotary", "name": "A", "axis": [-1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, 300.0, 20.0]},
-            {"type": "linear", "name": "X", "min": -650.0, "max": 0.0},
-            {"type": "linear", "name": "Y", "min": 0.0, "max": 1000.0},
-            {"type": "linear", "name": "Z", "min": -130.0, "max": 0.0},
+            {"type": "rotary", "name": "A", "axis": [-1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, -723.0, 20.0]},
+            {"type": "linear", "name": "X", "min": -672.0, "max": 0.0},
+            {"type": "linear", "name": "Y", "min": -1023.0, "max": 0.0},
+            {"type": "linear", "name": "Z", "min": -160.0, "max": 0.0},
         ]}])
     );
     assert_eq!(s.doc.manufacture.setups[0].post, "grblhal");
@@ -2641,7 +2641,7 @@ fn a_machine_is_added_used_by_a_setup_saved_and_listed() {
     assert_eq!(listed["machines"].as_array().map(Vec::len), Some(1));
     assert_eq!((machine["name"].as_str(), machine["post"].as_str(), machine["setups"].clone()), (Some("FlexiHAL"), Some("grblhal"), json!(["Side"])));
     assert_eq!(machine["axes"].as_array().map(Vec::len), Some(4));
-    assert_eq!(machine["axes"][0], json!({"type": "rotary", "name": "A", "axis": [-1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, 300.0, 20.0]}));
+    assert_eq!(machine["axes"][0], json!({"type": "rotary", "name": "A", "axis": [-1.0, 0.0, 0.0], "on": "table", "pivot": [0.0, -723.0, 20.0]}));
 }
 
 /// Editing renames a machine with its setups following, replaces its axes and clears its post;

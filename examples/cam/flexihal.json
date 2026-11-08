@@ -1,11 +1,11 @@
 {
-  "description": "The owner's FlexiHAL router as a machine, and a setup on it. The values are estimates, not yet measured on the machine. Homing puts machine zero in the front right corner with Z up: X travels 650 mm to the left (negative), Y 1000 mm back, Z 130 mm down. A turns about X on the table, continuously, its centre at Y 300 and 40 mm above the table, which is at Z -20; positive A is clockwise seen from X+, so it turns about -X. The post is grblHAL.",
+  "description": "The owner's FlexiHAL router as a machine, and a setup on it. X, Y and Z are from the controller's settings (2026-11-08): travel $130-$132 is 672, 1023 and 160 mm; homing ($23=2) runs X and Z to their plus ends and Y to its minus end, and without a forced origin machine space is minus the travel to 0. A is an estimate until the new A axis is mounted: it turns about X on the table, continuously, its centre 300 mm from the Y home (Y -723) and 40 mm above the table, which is estimated at Z -20; positive A is clockwise seen from X+, so it turns about -X. The post is grblHAL.",
   "commands": [
     {"command": "cam.machine.add", "params": {"name": "FlexiHAL", "post": "grblhal", "axes": [
-      {"type": "rotary", "name": "A", "axis": [-1, 0, 0], "on": "table", "pivot": [0, 300, 20]},
-      {"type": "linear", "name": "X", "min": -650, "max": 0},
-      {"type": "linear", "name": "Y", "min": 0, "max": 1000},
-      {"type": "linear", "name": "Z", "min": -130, "max": 0}
+      {"type": "rotary", "name": "A", "axis": [-1, 0, 0], "on": "table", "pivot": [0, -723, 20]},
+      {"type": "linear", "name": "X", "min": -672, "max": 0},
+      {"type": "linear", "name": "Y", "min": -1023, "max": 0},
+      {"type": "linear", "name": "Z", "min": -160, "max": 0}
     ]}},
     {"command": "cam.setup.create", "params": {"name": "Top", "machine": "FlexiHAL"}}
   ]
