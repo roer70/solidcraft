@@ -2724,6 +2724,32 @@ fn a_setup_takes_the_stock_block_of_the_setup_its_stock_comes_from() {
 }
 
 #[test]
+fn a_setup_in_the_same_clamping_runs_on_its_machine_and_post() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));
+    run(&mut s, "cam.machine.add", flexihal());
+    let centre = json!({"of": "stock", "x": "min", "y": "center", "z": "center"});
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "origin": centre, "machine": "FlexiHAL"}));
+    run(&mut s, "cam.setup.create", json!({"name": "Bottom", "axis": "-z", "stock_from": "Top", "same_clamping": true}));
+    // Turned over and clamped again, it may go to another machine.
+    run(&mut s, "cam.setup.create", json!({"name": "Other", "axis": "-z", "stock_from": "Top", "origin": [0, 0, 0], "post": "rs274"}));
+    let runs = |s: &Session| s.doc.manufacture.setups.iter().map(|x| (x.machine.clone(), x.post.clone())).collect::<Vec<_>>();
+    let flexi = (Some("FlexiHAL".to_string()), "grblhal".to_string());
+    assert_eq!(runs(&s), [flexi.clone(), flexi.clone(), (None, "rs274".to_string())]);
+
+    let e = s.execute("cam.setup.edit", &json!({"setup": "Bottom", "post": "rs274"})).unwrap_err().to_string();
+    assert!(e.contains("a setup in Top's clamping runs on its machine and post: FlexiHAL, grblhal"), "{e}");
+    let e = s.execute("cam.setup.edit", &json!({"setup": "Bottom", "machine": null})).unwrap_err().to_string();
+    assert!(e.contains("runs on its machine and post"), "{e}");
+    // The same, given, is no change.
+    run(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "post": "grblhal"}));
+
+    // The first's post changes for both.
+    run(&mut s, "cam.setup.edit", json!({"setup": "Top", "post": "grbl"}));
+    assert_eq!(runs(&s)[1], (Some("FlexiHAL".to_string()), "grbl".to_string()));
+}
+
+#[test]
 fn a_setup_in_the_same_clamping_shares_the_origin_on_the_a_axis() {
     let mut s = Session::default();
     run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));

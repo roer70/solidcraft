@@ -1972,6 +1972,13 @@ fn a_setup_form_taking_its_stock_from_another_leaves_the_stock_and_material_to_i
     let listed = h.app.session.execute("cam.list", &json!({})).unwrap();
     h.app.manufacture.form = setup_form(&listed["setups"][1]);
     assert_eq!(choices(&h.app, &listed, &json!({})).material.as_deref(), Some("Wood"));
+
+    // Staying in the first's clamping, it sends no post of its own: it runs on the first's.
+    let Some(Form::Setup(mut edit)) = setup_form(&listed["setups"][1]) else { panic!("no form") };
+    edit.same_clamping = true;
+    edit.post = 0;
+    let (_, p) = command(&Form::Setup(edit)).unwrap();
+    assert_eq!((p.get("post"), p.get("stock")), (None, None), "{p}");
 }
 
 #[test]

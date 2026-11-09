@@ -1366,7 +1366,10 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
             if !bodies.is_empty() || f.editing.is_some() {
                 p.insert("bodies".into(), if bodies.is_empty() { Value::Null } else { json!(bodies) });
             }
-            p.insert("post".into(), json!(solidcraft_engine::cam::Post::BUILTIN.get(f.post).copied().unwrap_or("rs274")));
+            // In a clamping, the machine and post are its first setup's.
+            if !same_clamping {
+                p.insert("post".into(), json!(solidcraft_engine::cam::Post::BUILTIN.get(f.post).copied().unwrap_or("rs274")));
+            }
             p.insert("material".into(), if f.material.trim().is_empty() { Value::Null } else { json!(f.material.trim()) });
             if !same_clamping {
                 p.insert("work_offset".into(), json!(WORK_OFFSETS.get(f.work_offset).copied().unwrap_or("G54")));
@@ -3635,6 +3638,8 @@ struct Choices {
     material: Option<String>,
     /// The design's setups in order, by id and name: what a setup can take its stock from.
     setups: Vec<(String, String)>,
+    /// Each setup's post, by id: what a setup taking its stock from it starts on.
+    setup_posts: Vec<(String, String)>,
     /// The bodies the selection is on, each once: what a setup can take as its part.
     bodies: Vec<String>,
     /// The selected corner or edge a setup's work origin can be put on (see [`solidcraft_engine::cam_origin_pick`]).
@@ -3717,6 +3722,8 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
         ));
     }
     let setups = listed["setups"].as_array().into_iter().flatten().filter_map(|x| Some((x["id"].as_u64()?.to_string(), text(x, "name")))).collect();
+    let setup_posts =
+        listed["setups"].as_array().into_iter().flatten().filter_map(|x| Some((x["id"].as_u64()?.to_string(), text(x, "post")))).collect();
     let mut bodies: Vec<String> = Vec::new();
     for item in &app.session.selection {
         let name = match item {
@@ -3729,7 +3736,21 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
         }
     }
     let holders = library["holders"].as_array().into_iter().flatten().filter_map(|h| h["name"].as_str()).map(str::to_string).collect();
-    Choices { sketches, tools, data, heights: None, picked: None, cut_heights: None, materials, holders, material, setups, bodies, origin_pick: None }
+    Choices {
+        sketches,
+        tools,
+        data,
+        heights: None,
+        picked: None,
+        cut_heights: None,
+        materials,
+        holders,
+        material,
+        setups,
+        setup_posts,
+        bodies,
+        origin_pick: None,
+    }
 }
 
 /// The spindle speed (rev/min) and feed (mm/min) a listed tool cuts at: in a material, `cut`'s
@@ -4261,17 +4282,44 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
                     }
                 });
             }
+            // Where the stock comes from: a block of its own, of a shape, or what an earlier setup
+            // leaves (`s<id>`); one choice, as they exclude each other.
+            let here = f.editing.map(|id| id.to_string());
+            let earlier: Vec<&(String, String)> = choices.setups.iter().take_while(|(id, _)| Some(id) != here.as_ref()).collect();
+            let mut sources: Vec<(String, String)> =
+                STOCK_SHAPES.iter().enumerate().map(|(k, (_, label))| (k.to_string(), tm(label).to_string())).collect();
+            sources.extend(earlier.iter().map(|(id, name)| (format!("s{id}"), tf("manufacture.what_setup_leaves", &[("setup", name)]))));
+            let mut source = match f.stock_from.trim() {
+                "" => f.stock_shape.to_string(),
+                id => format!("s{id}"),
+            };
+            let was = f.stock_from.clone();
+            pick(ui, need, "sc_cam_setup_stock", "Stock", &mut source, &sources);
+            match source.strip_prefix('s') {
+                Some(id) => f.stock_from = id.to_string(),
+                None => (f.stock_from, f.stock_shape) = (String::new(), source.parse().unwrap_or(0)),
+            }
+            // A setup newly taking its stock from another starts on that one's post: the same part,
+            // likely on the same machine.
+            if f.stock_from != was
+                && let Some(k) = choices
+                    .setup_posts
+                    .iter()
+                    .find(|(id, _)| *id == f.stock_from)
+                    .and_then(|(_, post)| solidcraft_engine::cam::Post::BUILTIN.iter().position(|p| p == post))
+            {
+                f.post = k;
+            }
             // The setup it takes its stock from, by name.
             let from = choices.setups.iter().find(|(id, _)| *id == f.stock_from.trim()).map(|(_, name)| name.clone());
-            let shapes = STOCK_SHAPES.map(|(_, label)| label);
-            if let Some(from) = &from {
-                // What the earlier setup leaves, in its block: nothing to give here.
-                labelled(ui, "Stock", |ui| {
-                    let r = ui.label(RichText::new(tf("manufacture.what_setup_leaves", &[("setup", from)])).color(Tokens::get().text_dim));
-                    explained(r, "Stock from", None);
-                });
+            // Staying clamped needs an earlier setup to stay clamped in.
+            if from.is_none() {
+                f.same_clamping = false;
             } else {
-                choice(ui, need, "sc_cam_setup_stock", "Stock", &mut f.stock_shape, &shapes);
+                labelled(ui, "Same clamping", |ui| {
+                    let r = crate::ui_kit::checkbox(ui, tm("Stays clamped, turned with A"), &mut f.same_clamping);
+                    explained(r, "Same clamping", None);
+                });
             }
             match f.stock_shape {
                 _ if from.is_some() => {}
@@ -4343,25 +4391,20 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
                 choice(ui, need, "sc_cam_setup_y", "Origin Y", y, &["min", "centre", "max"]);
                 choice(ui, need, "sc_cam_setup_z", "Origin Z", z, &["bottom", "middle", "top"]);
             }
-            choice(ui, need, "sc_cam_setup_post", "Post", &mut f.post, solidcraft_engine::cam::Post::BUILTIN);
+            match (&from, choices.setup_posts.iter().find(|(id, _)| *id == f.stock_from.trim())) {
+                // The clamping's machine and post: nothing to choose here.
+                (Some(setup), Some((_, post))) if same_clamping => labelled(ui, "Post", |ui| {
+                    let r = ui.label(
+                        RichText::new(tf("manufacture.material_from_setup", &[("material", post), ("setup", setup)])).color(Tokens::get().text_dim),
+                    );
+                    explained(r, "Same clamping", None);
+                }),
+                _ => choice(ui, need, "sc_cam_setup_post", "Post", &mut f.post, solidcraft_engine::cam::Post::BUILTIN),
+            }
             if !same_clamping {
                 choice(ui, need, "sc_cam_setup_offset", "Work offset", &mut f.work_offset, &WORK_OFFSETS);
             }
             choice(ui, need, "sc_cam_setup_x", "X direction", &mut f.x_axis, &X_DIRECTIONS);
-            // The setups before this one.
-            let mut earlier: Vec<(String, String)> = vec![(String::new(), tm("its own stock box").into())];
-            let here = f.editing.map(|id| id.to_string());
-            earlier.extend(choices.setups.iter().take_while(|(id, _)| Some(id) != here.as_ref()).cloned());
-            pick(ui, need, "sc_cam_setup_stock_from", "Stock from", &mut f.stock_from, &earlier);
-            // Staying clamped needs an earlier setup to stay clamped in.
-            if f.stock_from.trim().is_empty() {
-                f.same_clamping = false;
-            } else {
-                labelled(ui, "Same clamping", |ui| {
-                    let r = crate::ui_kit::checkbox(ui, tm("Stays clamped, turned with A"), &mut f.same_clamping);
-                    explained(r, "Same clamping", None);
-                });
-            }
             // Clamps: from-to across and their top, each on a row of its own.
             let mut gone = None;
             for (k, c) in f.clamps.iter_mut().enumerate() {

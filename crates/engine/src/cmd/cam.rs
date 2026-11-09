@@ -75,7 +75,7 @@ const SETUP_DOC: &str = "name?; axis?: +x|-x|+y|-y|+z|-z or [x, y, z], the direc
      material?: what the stock is made of (operations take their tool's cutting data for it; null: none, or stock_from's); work_offset?: G54 to G59 \
      (or 54 to 59; default G54), the work offset its programs run in; stock_from?: an earlier setup (id or name; null: none) whose result \
      is the stock (its block too: stock is not used), its tool axis the same or turned over (the part turned over about the world X axis for a setup from -z); same_clamping?: true when the part stays clamped as for stock_from's setup and is only turned with \
-     A, so its sheet asks for no new clamping; it shares that setup's origin and work offset (needs stock_from; default false); x_axis?: the setup's X direction across its \
+     A, so its sheet asks for no new clamping; it shares that setup's origin, work offset, machine and post (needs stock_from; default false); x_axis?: the setup's X direction across its \
      axis, as axis is given (default: worked out from the axis; from -z, +x turns the part about X and -x about Y); clamps?: \
      [{name?, min: [x, y], max: [x, y], top}] boxes in work coordinates no tool may enter (operations that do are warned about); copies?: \
      {nx, ny, dx, dy}: copies of the part in rows along X and columns along Y, dx and dy apart, each cut by every operation (null: one) → setup: id, name";
@@ -1174,6 +1174,7 @@ fn setup_create(s: &mut Session, p: &Value) -> Result<Value> {
         x_axis,
         operations: Vec::new(),
     };
+    runs_as_clamping(s, &mut setup, p, cmd)?;
     resolve(s, &setup).map_err(|e| bad(cmd, e))?;
     setup.id = next_id(s);
     let id = setup.id;
@@ -1272,6 +1273,7 @@ fn setup_edit(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(material) = material_param(p, cmd)? {
         setup.material = material;
     }
+    runs_as_clamping(s, &mut setup, p, cmd)?;
     resolve(s, &setup).map_err(|e| bad(cmd, e))?;
     let (id, name) = (setup.id, setup.name.clone());
     let setups = &mut s.doc_mut().manufacture.setups;
@@ -1282,17 +1284,32 @@ fn setup_edit(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "setup": id, "name": name }))
 }
 
-/// Gives each setup that stays in an earlier one's clamping that setup's work offset: they share
-/// one work zero. In list order, so a chain of them follows its first.
+/// A setup in an earlier one's clamping runs on that one's machine and post: it is the same part on
+/// the same table. One the call gives that differs is refused.
+fn runs_as_clamping(s: &Session, setup: &mut Setup, p: &Value, cmd: &str) -> Result<()> {
+    let Some(earlier) = setup.stock_from.filter(|_| setup.same_clamping).and_then(|id| s.doc.manufacture.setups.iter().find(|x| x.id == id)) else {
+        return Ok(());
+    };
+    let differs = (p.get("machine").is_some() && setup.machine != earlier.machine) || (p.get("post").is_some() && setup.post != earlier.post);
+    if differs {
+        let machine = earlier.machine.as_deref().unwrap_or("no machine");
+        return Err(bad(cmd, format!("a setup in {}'s clamping runs on its machine and post: {machine}, {}", earlier.name, earlier.post)));
+    }
+    (setup.machine, setup.post) = (earlier.machine.clone(), earlier.post.clone());
+    Ok(())
+}
+
+/// Gives each setup that stays in an earlier one's clamping that setup's work offset, machine and
+/// post: they share one work zero on one table. In list order, so a chain of them follows its first.
 fn follow_clamping_offsets(setups: &mut [Setup]) {
     for k in 0..setups.len() {
         let Some(from) = setups.get(k).filter(|x| x.same_clamping).and_then(|x| x.stock_from) else {
             continue;
         };
-        if let Some(offset) = setups.iter().find(|x| x.id == from).map(|x| x.work_offset)
+        if let Some((offset, machine, post)) = setups.iter().find(|x| x.id == from).map(|x| (x.work_offset, x.machine.clone(), x.post.clone()))
             && let Some(later) = setups.get_mut(k)
         {
-            later.work_offset = offset;
+            (later.work_offset, later.machine, later.post) = (offset, machine, post);
         }
     }
 }
