@@ -4847,6 +4847,23 @@ fn sheet(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
+/// Where a setup's program turns A before it cuts: when its machine has a rotary A, to the
+/// angle that brings the setup's tool axis to the tool, after lifting to the top of the
+/// machine's Z. None on no machine or one without A.
+fn a_turn(s: &Session, setup: &Setup) -> std::result::Result<Option<cam::Turn>, String> {
+    let Some(machine) = setup.machine.as_deref().and_then(|m| s.doc.manufacture.machine(m)) else {
+        return Ok(None);
+    };
+    if !matches!(machine.axis(AxisName::A), Some(MachineAxis::Rotary { .. })) {
+        return Ok(None);
+    }
+    let a = machine.a_angle(setup.axis)?;
+    let Some(MachineAxis::Linear { max, .. }) = machine.axis(AxisName::Z) else {
+        return Err(format!("machine \"{}\" has no Z travel to lift the tool to before A turns", machine.name));
+    };
+    Ok(Some(cam::Turn { a, safe_z: *max }))
+}
+
 fn post(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "cam.post";
     let setup = setup(s, p, cmd)?;
@@ -4877,7 +4894,8 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
         optional_stops: bool_(p, "optional_stops").unwrap_or(false),
         air_cut: seconds("air_cut", 1000.0)?,
     };
-    let mut program = cam::Program { name, operations: Vec::new(), notes: Vec::new(), safety, work_offset: Some(setup.work_offset) };
+    let turn = a_turn(s, setup).map_err(|e| bad(cmd, e))?;
+    let mut program = cam::Program { name, operations: Vec::new(), notes: Vec::new(), safety, work_offset: Some(setup.work_offset), turn };
     let mut minutes = 0.0;
     let at = resolve(s, setup).map_err(|e| bad(cmd, e))?;
     for (_, op) in setup.operations.iter().enumerate().filter(|(i, _)| only.is_none_or(|o| o == *i)) {

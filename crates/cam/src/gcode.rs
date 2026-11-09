@@ -41,7 +41,26 @@ pub struct Program {
     /// The work offset the program runs in (54 to 59: `G54` to `G59`; none: `G54`).
     #[serde(default)]
     pub work_offset: Option<u8>,
+    /// Where the rotary A axis stands while the program cuts (none: the machine has no A, and
+    /// the program never moves it).
+    #[serde(default)]
+    pub turn: Option<Turn>,
 }
+
+/// A turn of the rotary A axis before a program cuts: the tool is lifted to `safe_z` in the
+/// machine's coordinates (`G53`), clear of the part whichever way it turns, and then A turns.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Turn {
+    /// The A angle, in degrees.
+    pub a: f64,
+    /// The machine Z the tool is lifted to before A turns (mm, machine coordinates).
+    pub safe_z: f64,
+}
+
+/// Furthest an A angle is written (degrees).
+const MAX_A: f64 = 100_000.0;
+/// Furthest from machine zero a safe Z is (mm).
+const MAX_SAFE_Z: f64 = 100_000.0;
 
 /// What a program does for the machine and the person at it besides the toolpaths.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -264,6 +283,19 @@ pub fn emit(program: &Program, post: &Post) -> Result<String> {
     if offset != 54 && !post.header.iter().any(|l| l.contains("{wcs}")) {
         w.block(&wcs);
     }
+    if let Some(turn) = program.turn {
+        if !turn.a.is_finite() || turn.a.abs() > MAX_A {
+            return invalid(format!("the A angle must be a number within ±{MAX_A}°"));
+        }
+        if !turn.safe_z.is_finite() || turn.safe_z.abs() > MAX_SAFE_Z {
+            return invalid(format!("the safe Z must be a number within ±{MAX_SAFE_Z} mm"));
+        }
+        // Up first, in machine coordinates, so the part turns clear of the tool.
+        let (rapid, z) = (w.motion(0), w.coord(turn.safe_z));
+        w.block(&format!("G53 {rapid} Z{z}"));
+        let a = w.value(turn.a, post.decimals);
+        w.block(&format!("{rapid} A{a}"));
+    }
     let lift = Vec3::new(0.0, 0.0, safety.air_cut);
     let mut tool: Option<u32> = None;
     let mut rpm: Option<String> = None;
@@ -387,6 +419,22 @@ pub fn parse(text: &str) -> Result<Vec<Move>> {
         }
         let ws = words(line, n)?;
         let mut dwell = false;
+        // A move in machine coordinates (`G53`) is no point of the toolpath, and where the tool is
+        // after it is not known in work coordinates until the next move says.
+        let codes = || ws.iter().filter(|(c, _)| *c == 'G').map(|(_, v)| (v * 10.0).round() as i64);
+        if codes().any(|g| g == 530) {
+            // Its G0 or G1 still stays in force for the lines after it.
+            mode = codes()
+                .filter_map(|g| match g {
+                    0 => Some(0),
+                    10 => Some(1),
+                    _ => None,
+                })
+                .next_back()
+                .or(mode);
+            (x, y, z, pos) = (None, None, None, None);
+            continue;
+        }
         for &(c, v) in &ws {
             if c != 'G' {
                 continue;

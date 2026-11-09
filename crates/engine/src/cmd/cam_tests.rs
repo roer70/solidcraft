@@ -2811,6 +2811,41 @@ fn a_setup_in_the_same_clamping_shares_the_origin_on_the_a_axis() {
     assert!(e.contains("goes round in a circle"), "{e}");
 }
 
+/// Two setups on one clamping on FlexiHAL: each program lifts to the top of Z and turns A, to 0
+/// and then to 180, in the same work offset. A setup on no machine, or on one without A, is
+/// posted as before; one whose axis A cannot reach is refused.
+#[test]
+fn the_post_turns_a_to_each_setup_in_one_clamping() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));
+    run(&mut s, "cam.machine.add", flexihal());
+    run(&mut s, "cam.tool.define", json!({"number": 1, "kind": "flat", "diameter": 6}));
+    let centre = json!({"of": "stock", "x": "min", "y": "center", "z": "center"});
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "origin": centre, "machine": "FlexiHAL", "work_offset": 55}));
+    run(&mut s, "cam.setup.create", json!({"name": "Bottom", "axis": "-z", "stock_from": "Top", "same_clamping": true}));
+    run(&mut s, "cam.setup.create", json!({"name": "Loose", "origin": [0, 0, 0]}));
+    run(&mut s, "cam.machine.add", json!({"name": "Three axis", "axes": [{"type": "linear", "name": "Z", "min": -50, "max": 0}]}));
+    run(&mut s, "cam.setup.create", json!({"name": "Plain", "origin": [0, 0, 0], "machine": "Three axis"}));
+    for setup in ["Top", "Bottom", "Loose", "Plain"] {
+        run(&mut s, "cam.op.face", json!({"setup": setup, "tool": 1, "spindle_rpm": 10000, "feed": 800, "stepover": 5, "stepdown": 1}));
+    }
+    let post = |s: &mut Session, setup: &str| run(s, "cam.post", json!({"setup": setup}))["gcode"].as_str().unwrap().to_string();
+    for (setup, a) in [("Top", "A0"), ("Bottom", "A180")] {
+        let text = post(&mut s, setup);
+        assert!(text.contains(&format!("\nG53 G0 Z0\nG0 {a}\n")), "{setup}:\n{text}");
+        assert!(text.contains(" G55 "), "{setup}:\n{text}");
+        let turn = text.find("G53").unwrap();
+        assert!(text.find("\nG0 X").is_some_and(|first| first > turn), "{setup}: A turns before the tool moves:\n{text}");
+    }
+    for setup in ["Loose", "Plain"] {
+        let text = post(&mut s, setup);
+        assert!(!text.contains("G53") && !text.contains(" A"), "{setup}:\n{text}");
+    }
+    run(&mut s, "cam.setup.edit", json!({"setup": "Loose", "machine": "FlexiHAL", "axis": [0.3, 0, 1]}));
+    let e = s.execute("cam.post", &json!({"setup": "Loose"})).unwrap_err().to_string();
+    assert!(e.contains("not square to the rotary axis"), "{e}");
+}
+
 /// A machine is added, a setup runs on it and takes its post, and the design saves, loads and
 /// lists it with the setup on it.
 #[test]
