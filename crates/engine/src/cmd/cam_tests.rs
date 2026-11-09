@@ -2666,6 +2666,35 @@ fn a_setup_in_the_same_clamping_is_turned_with_a_not_clamped_again() {
 /// A centre. Out of the clamping the work zero stays where it was, and a damaged chain is an
 /// error, never a hang.
 #[test]
+fn a_setup_without_a_material_cuts_in_that_of_the_setup_its_stock_comes_from() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));
+    run(&mut s, "cam.machine.add", flexihal());
+    run(
+        &mut s,
+        "cam.tool.define",
+        json!({"number": 1, "kind": "flat", "diameter": 6, "cutting": [{"material": "Aluminium", "spindle_rpm": 18000, "feed": 800}]}),
+    );
+    let centre = json!({"of": "stock", "x": "min", "y": "center", "z": "center"});
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "origin": centre, "machine": "FlexiHAL", "material": "Aluminium"}));
+    run(&mut s, "cam.setup.create", json!({"name": "Bottom", "axis": "-z", "machine": "FlexiHAL", "stock_from": "Top", "same_clamping": true}));
+    run(&mut s, "cam.setup.create", json!({"name": "Flipped", "axis": "-z", "stock_from": "Bottom", "origin": [0, 0, 0], "work_offset": 56}));
+    for setup in ["Bottom", "Flipped"] {
+        run(&mut s, "cam.op.face", json!({"setup": setup, "tool": 1}));
+        let k = s.doc.manufacture.setups.iter().position(|x| x.name == setup).unwrap();
+        let op = &s.doc.manufacture.setups[k].operations[0];
+        assert_eq!((op.spindle_rpm, op.cut_feed), (18000.0, 800.0), "{setup}");
+        let sheet = run(&mut s, "cam.sheet", json!({"setup": setup}))["text"].as_str().unwrap().to_string();
+        assert!(sheet.contains("Material: Aluminium"), "{setup}: {sheet}");
+    }
+    // Its own material wins, and it stays its own: the list shows none for the others.
+    run(&mut s, "cam.setup.edit", json!({"setup": "Flipped", "material": "Wood"}));
+    let e = s.execute("cam.op.face", &json!({"setup": "Flipped", "tool": 1})).unwrap_err().to_string();
+    assert!(e.contains("none for Wood"), "{e}");
+    assert_eq!(run(&mut s, "cam.list", json!({}))["setups"][1]["material"], Value::Null);
+}
+
+#[test]
 fn a_setup_in_the_same_clamping_shares_the_origin_on_the_a_axis() {
     let mut s = Session::default();
     run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));

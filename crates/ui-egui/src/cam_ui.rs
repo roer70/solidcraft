@@ -3671,7 +3671,17 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
         None if setups.len() == 1 => setups.first(),
         None => None,
     };
-    let material = setup.and_then(|x| x["material"].as_str()).map(str::to_string);
+    // Its own material, else that of the setup it takes its stock from (the same part).
+    let mut material = None;
+    let mut at = setup;
+    for _ in 0..=setups.len() {
+        let Some(x) = at else { break };
+        if let Some(m) = x["material"].as_str() {
+            material = Some(m.to_string());
+            break;
+        }
+        at = x["stock_from"].as_u64().and_then(|from| setups.iter().find(|y| y["id"].as_u64() == Some(from)));
+    }
     // The design's own copy of a tool is the one its operations cut with.
     for t in listed["tools"].as_array().into_iter().flatten().chain(library["tools"].as_array().into_iter().flatten()) {
         let (Some(n), Some(diameter)) = (t["number"].as_u64(), t["diameter"].as_f64()) else { continue };

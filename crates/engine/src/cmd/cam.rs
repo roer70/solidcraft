@@ -1864,6 +1864,20 @@ fn clamping_first<'a>(s: &'a Session, setup: &'a Setup) -> std::result::Result<&
     Err("the setups' clamping goes round in a circle".into())
 }
 
+/// What a setup's stock is made of: its own material, else that of the setup it takes its stock
+/// from (the same part, turned over or turned with A), back along the chain.
+fn stock_material(s: &Session, setup: &Setup) -> Option<String> {
+    let setups = &s.doc.manufacture.setups;
+    let mut at = setup;
+    for _ in 0..=setups.len() {
+        if let Some(m) = &at.material {
+            return Some(m.clone());
+        }
+        at = setups.iter().find(|x| Some(x.id) == at.stock_from)?;
+    }
+    None
+}
+
 /// How many tools a setup's program loads: one for its first operation, and one each time the
 /// next operation's tool is another.
 fn tool_changes(setup: &Setup) -> usize {
@@ -3319,7 +3333,8 @@ fn add_op(s: &mut Session, p: &Value, cmd: &str, label: &str, kind: impl FnOnce(
     let positive = |k: &str| num(p, k).filter(|v| *v > 0.0 && *v <= 1.0e6);
     // Its cutting data in the stock's material, where it has some; a speed given here is the one a
     // chip load feeds at. A surface speed's speed stays within the machine's spindle.
-    let mut cutting = stored.in_material(setup.material.as_deref());
+    let material = stock_material(s, &setup);
+    let mut cutting = stored.in_material(material.as_deref());
     if let Some(rpm) = positive("spindle_rpm") {
         (cutting.spindle_rpm, cutting.surface_speed) = (Some(rpm), None);
     }
@@ -3328,7 +3343,7 @@ fn add_op(s: &mut Session, p: &Value, cmd: &str, label: &str, kind: impl FnOnce(
         Some(_) => Some(positive("max_spindle_rpm").ok_or_else(|| bad(cmd, "`max_spindle_rpm` must be above 0"))?),
     };
     let tool = cutting.with_speeds(max_rpm);
-    let none = match &setup.material {
+    let none = match &material {
         Some(m) => format!("none for {m} and none of its own"),
         None => "none of its own".to_string(),
     };
@@ -4560,7 +4575,7 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
 /// The comment lines at the top of a program, for checking it at the machine: the stock and
 /// where its top and bottom are, where the work zero is, the tools and the cutting time.
 /// `clamping`: what it says of the setup's clamping ([`clamping_notes`]).
-fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: f64, clamping: Vec<String>) -> Vec<String> {
+fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: f64, clamping: Vec<String>, material: Option<String>) -> Vec<String> {
     let mm = |v: f64| {
         let t = format!("{:.3}", v + 0.0);
         let t = t.trim_end_matches('0').trim_end_matches('.').to_string();
@@ -4629,7 +4644,7 @@ fn program_notes(setup: &Setup, at: &Resolved, ops: &[cam::Operation], minutes: 
     if let Some(c) = setup.copies {
         notes.push(format!("Copies: {} x {}, {} x {} mm apart", c.nx, c.ny, mm(c.dx), mm(c.dy)));
     }
-    if let Some(material) = &setup.material {
+    if let Some(material) = material {
         notes.push(format!("Material: {material}"));
     }
     if !setup.fixtures.is_empty() {
@@ -4718,7 +4733,7 @@ fn sheet(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     let minutes: f64 = ops.iter().filter_map(|o| o["toolpath"]["cut_minutes"].as_f64()).sum();
-    for note in program_notes(&setup, &at, &programs, minutes, clamping_notes(s, &setup)) {
+    for note in program_notes(&setup, &at, &programs, minutes, clamping_notes(s, &setup), stock_material(s, &setup)) {
         out.push(format!("- {}", cell(&note)));
     }
     out.push(format!("- Post: {}", cell(&setup.post)));
@@ -4831,7 +4846,7 @@ fn post(s: &mut Session, p: &Value) -> Result<Value> {
         let tool = s.doc.manufacture.tool(op.tool).cloned().ok_or_else(|| bad(cmd, format!("no tool {}", op.tool)))?;
         program.operations.push(cam::Operation { name: op.name.clone(), tool, spindle_rpm: op.spindle_rpm, coolant: op.coolant, path });
     }
-    program.notes = program_notes(setup, &at, &program.operations, minutes, clamping_notes(s, setup));
+    program.notes = program_notes(setup, &at, &program.operations, minutes, clamping_notes(s, setup), stock_material(s, setup));
     let text = cam::emit(&program, &post).map_err(cam_error)?;
     let mut out = json!({"lines": text.lines().count(), "extension": post.extension, "post": post.name, "cut_minutes": minutes});
     match str_(p, "path") {
