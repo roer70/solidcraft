@@ -1,0 +1,18 @@
+{
+  "en": {
+    "manufacture.material_from_setup": "{material}, from {setup}",
+    "manufacture.what_setup_leaves": "what {setup} leaves"
+  },
+  "de": {
+    "manufacture.material_from_setup": "{material}, aus {setup}",
+    "manufacture.what_setup_leaves": "was {setup} übrig lässt"
+  },
+  "ja": {
+    "manufacture.material_from_setup": "{material}（{setup} から）",
+    "manufacture.what_setup_leaves": "{setup} の残り"
+  },
+  "zh": {
+    "manufacture.material_from_setup": "{material}（来自 {setup}）",
+    "manufacture.what_setup_leaves": "{setup} 留下的部分"
+  }
+}

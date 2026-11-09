@@ -1353,7 +1353,8 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
                 }
                 _ => {}
             }
-            if !stock.is_empty() {
+            // Taken from an earlier setup, the stock is that one's block: nothing of its own.
+            if !stock.is_empty() && !has_stock_from {
                 p.insert("stock".into(), Value::Object(stock));
             }
             // Every body when none is named.
@@ -3629,7 +3630,8 @@ struct Choices {
     materials: Vec<String>,
     /// The machine library's holders, by name.
     holders: Vec<String>,
-    /// The material of the setup an operation form adds to (its tools' data is for it).
+    /// The material of the setup an operation form adds to (its tools' data is for it), or, in a
+    /// setup form, the one it has from the setup it takes its stock from.
     material: Option<String>,
     /// The design's setups in order, by id and name: what a setup can take its stock from.
     setups: Vec<(String, String)>,
@@ -3666,10 +3668,12 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
         Some(Form::Op(f)) => f.setup(),
         _ => None,
     };
-    let setup = match editing {
-        Some(id) => setups.iter().find(|x| x["id"].as_u64() == Some(id)),
-        None if setups.len() == 1 => setups.first(),
-        None => None,
+    let setup = match (&app.manufacture.form, editing) {
+        // A setup form: the setup it takes its stock from, whose material it has without one of its own.
+        (Some(Form::Setup(f)), _) => f.stock_from.trim().parse::<u64>().ok().and_then(|id| setups.iter().find(|x| x["id"].as_u64() == Some(id))),
+        (_, Some(id)) => setups.iter().find(|x| x["id"].as_u64() == Some(id)),
+        (_, None) if setups.len() == 1 => setups.first(),
+        (_, None) => None,
     };
     // Its own material, else that of the setup it takes its stock from (the same part).
     let mut material = None;
@@ -4257,9 +4261,20 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
                     }
                 });
             }
+            // The setup it takes its stock from, by name.
+            let from = choices.setups.iter().find(|(id, _)| *id == f.stock_from.trim()).map(|(_, name)| name.clone());
             let shapes = STOCK_SHAPES.map(|(_, label)| label);
-            choice(ui, need, "sc_cam_setup_stock", "Stock", &mut f.stock_shape, &shapes);
+            if let Some(from) = &from {
+                // What the earlier setup leaves, in its block: nothing to give here.
+                labelled(ui, "Stock", |ui| {
+                    let r = ui.label(RichText::new(tf("manufacture.what_setup_leaves", &[("setup", from)])).color(Tokens::get().text_dim));
+                    explained(r, "Stock from", None);
+                });
+            } else {
+                choice(ui, need, "sc_cam_setup_stock", "Stock", &mut f.stock_shape, &shapes);
+            }
             match f.stock_shape {
+                _ if from.is_some() => {}
                 1 => {
                     let [x, y, z] = &mut f.stock_size;
                     field(ui, need, "Stock size X", x, "required");
@@ -4390,7 +4405,12 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
                     f.clamps.push(Default::default());
                 }
             });
-            let mut materials: Vec<(String, String)> = vec![(String::new(), tm("not said").into())];
+            // None of its own: that of the setup it takes its stock from, where that says one.
+            let unsaid = match (&from, &choices.material) {
+                (Some(setup), Some(m)) => tf("manufacture.material_from_setup", &[("material", m), ("setup", setup)]),
+                _ => tm("not said").into(),
+            };
+            let mut materials: Vec<(String, String)> = vec![(String::new(), unsaid)];
             materials.extend(choices.materials.iter().map(|m| (m.clone(), m.clone())));
             pick(ui, need, "sc_cam_setup_material", "Material", &mut f.material, &materials);
         }
@@ -4698,6 +4718,7 @@ fn missing(form: &Form, lists: &Choices) -> Vec<Need> {
                 }
             }
             match f.stock_shape {
+                _ if !empty(&f.stock_from) => {}
                 1 => {
                     for (field, value) in [("Stock size X", &f.stock_size[0]), ("Stock size Y", &f.stock_size[1]), ("Stock size Z", &f.stock_size[2])]
                     {

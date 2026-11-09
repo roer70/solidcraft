@@ -72,9 +72,9 @@ const SETUP_DOC: &str = "name?; axis?: +x|-x|+y|-y|+z|-z or [x, y, z], the direc
      tool axis at that point of the edge, which it follows as the design changes, or \"clamping\": the origin of the setup whose clamping it \
      stays in (only with same_clamping, and its default there); post?: rs274|grbl|grblhal|lnc|lnc_atc (default \
      rs274, or the machine's); machine?: the machine it runs on, by name (cam.machine.add; null: none, a generic three-axis mill); \
-     material?: what the stock is made of (operations take their tool's cutting data for it; null: none); work_offset?: G54 to G59 \
+     material?: what the stock is made of (operations take their tool's cutting data for it; null: none, or stock_from's); work_offset?: G54 to G59 \
      (or 54 to 59; default G54), the work offset its programs run in; stock_from?: an earlier setup (id or name; null: none) whose result \
-     is the stock, its tool axis the same or turned over (the part turned over about the world X axis for a setup from -z); same_clamping?: true when the part stays clamped as for stock_from's setup and is only turned with \
+     is the stock (its block too: stock is not used), its tool axis the same or turned over (the part turned over about the world X axis for a setup from -z); same_clamping?: true when the part stays clamped as for stock_from's setup and is only turned with \
      A, so its sheet asks for no new clamping; it shares that setup's origin and work offset (needs stock_from; default false); x_axis?: the setup's X direction across its \
      axis, as axis is given (default: worked out from the axis; from -z, +x turns the part about X and -x about Y); clamps?: \
      [{name?, min: [x, y], max: [x, y], top}] boxes in work coordinates no tool may enter (operations that do are warned about); copies?: \
@@ -1760,16 +1760,39 @@ fn resolve(s: &Session, setup: &Setup) -> std::result::Result<Resolved, String> 
             .and_then(|d| if d > 0.0 && d.is_finite() { Ok(d) } else { Err(format!("the stock's {what} must be above 0")) })
     };
     let mut round = None;
-    let stock = match (&setup.stock.shape, part) {
-        (_, None) => None,
-        (StockShape::Offset, Some((lo, hi))) => Some((lo - Vec3::new(side, side, bottom), hi + Vec3::new(side, side, top))),
+    // Taking its stock from an earlier setup, the block is that one's, seen along this setup's axes:
+    // it is the same piece, turned over or turned with A. Only an earlier one, so the chain ends.
+    let setups = &s.doc.manufacture.setups;
+    let here = setups.iter().position(|e| e.id == setup.id).unwrap_or(setups.len());
+    let earlier = setup.stock_from.and_then(|id| setups.iter().take(here).find(|e| e.id == id)).filter(|e| facing(e.axis, setup.axis).is_some());
+    let inherited = earlier.is_some();
+    let stock = match (earlier, &setup.stock.shape, part) {
+        (Some(e), _, _) => {
+            let before = resolve(s, e)?;
+            let f = &before.frame;
+            // A point in the earlier setup's work coordinates, along this setup's axes from the world origin.
+            let here = |q: Vec3| {
+                let w = f.o + f.x * q.x + f.y * q.y + f.z * q.z;
+                Vec3::new(w.dot(x), w.dot(y), w.dot(z))
+            };
+            round = before.round.map(|(c, r)| {
+                let q = here(Vec3::new(c.x, c.y, 0.0));
+                (Vec2::new(q.x, q.y), r)
+            });
+            before.stock.map(|(lo, hi)| {
+                let (a, b) = (here(lo), here(hi));
+                (a.min(b), a.max(b))
+            })
+        }
+        (None, _, None) => None,
+        (None, StockShape::Offset, Some((lo, hi))) => Some((lo - Vec3::new(side, side, bottom), hi + Vec3::new(side, side, top))),
         // Centred on the part across; its top `top` above the part's.
-        (StockShape::Box { x: sx, y: sy, z: sz }, Some((lo, hi))) => {
+        (None, StockShape::Box { x: sx, y: sy, z: sz }, Some((lo, hi))) => {
             let (sx, sy, sz) = (size("size along X", sx)?, size("size along Y", sy)?, size("size along Z", sz)?);
             let (c, top) = ((lo + hi) * 0.5, hi.z + top);
             Some((Vec3::new(c.x - sx * 0.5, c.y - sy * 0.5, top - sz), Vec3::new(c.x + sx * 0.5, c.y + sy * 0.5, top)))
         }
-        (StockShape::Round { diameter }, Some((lo, hi))) => {
+        (None, StockShape::Round { diameter }, Some((lo, hi))) => {
             if setup.copies.is_some() {
                 return Err("a round stock holds one part: copies need a box stock".into());
             }
@@ -1826,9 +1849,9 @@ fn resolve(s: &Session, setup: &Setup) -> std::result::Result<Resolved, String> 
     };
     let shift = Vec3::new(o.dot(x), o.dot(y), o.dot(z));
     let moved = |b: Box3| (b.0 - shift, b.1 - shift);
-    // The stock reaches over every copy.
+    // The stock reaches over every copy (an earlier setup's already does).
     let copies = setup.copies.map_or_else(|| vec![(0.0, 0.0)], |c| c.offsets());
-    let (far_x, far_y) = copies.iter().fold((0.0f64, 0.0f64), |m, c| (m.0.max(c.0), m.1.max(c.1)));
+    let (far_x, far_y) = if inherited { (0.0, 0.0) } else { copies.iter().fold((0.0f64, 0.0f64), |m, c| (m.0.max(c.0), m.1.max(c.1))) };
     let stock = stock.map(moved).map(|(lo, hi)| (lo, hi + Vec3::new(far_x, far_y, 0.0)));
     let round = round.map(|(c, r)| (c - Vec2::new(shift.x, shift.y), r));
     Ok(Resolved {

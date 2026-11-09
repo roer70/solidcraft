@@ -2695,6 +2695,35 @@ fn a_setup_without_a_material_cuts_in_that_of_the_setup_its_stock_comes_from() {
 }
 
 #[test]
+fn a_setup_takes_the_stock_block_of_the_setup_its_stock_comes_from() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "stock": {"side": 2, "top": 3, "bottom": 1}, "origin": [0, 0, 0]}));
+    // Its own stock is not used: the block is Top's, turned over.
+    run(
+        &mut s,
+        "cam.setup.create",
+        json!({"name": "Bottom", "axis": "-z", "stock_from": "Top", "stock": {"side": 9, "top": 9, "bottom": 9}, "origin": [0, 0, 0]}),
+    );
+    let listed = run(&mut s, "cam.list", json!({}));
+    let size = |k: usize, of: &str| {
+        let b = &listed["setups"][k][of];
+        [0, 1, 2].map(|i| b["max"][i].as_f64().unwrap() - b["min"][i].as_f64().unwrap())
+    };
+    assert_eq!(size(1, "stock_box"), [64.0, 44.0, 14.0]);
+    let (stock, part) = (&listed["setups"][1]["stock_box"], &listed["setups"][1]["part_box"]);
+    let gap = |a: &Value, b: &Value| (a.as_f64().unwrap() - b.as_f64().unwrap()).abs();
+    // Top's bottom offset is on top now, its top offset below.
+    assert!((gap(&stock["max"][2], &part["max"][2]) - 1.0).abs() < 1e-9, "{listed}");
+    assert!((gap(&part["min"][2], &stock["min"][2]) - 3.0).abs() < 1e-9, "{listed}");
+    // Leaving it, the setup's own stock counts again.
+    run(&mut s, "cam.setup.edit", json!({"setup": "Bottom", "stock_from": null}));
+    let listed = run(&mut s, "cam.list", json!({}));
+    let b = &listed["setups"][1]["stock_box"];
+    assert_eq!(b["max"][2].as_f64().unwrap() - b["min"][2].as_f64().unwrap(), 28.0);
+}
+
+#[test]
 fn a_setup_in_the_same_clamping_shares_the_origin_on_the_a_axis() {
     let mut s = Session::default();
     run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));

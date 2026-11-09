@@ -1949,6 +1949,32 @@ fn a_new_operation_goes_into_the_setup_its_form_names() {
 /// A setup that stays clamped takes the clamping's work zero and offset: the form sends neither,
 /// keeps them through an edit, and leaving the clamping keeps the work zero where it was.
 #[test]
+fn a_setup_form_taking_its_stock_from_another_leaves_the_stock_and_material_to_it() {
+    let mut h = lab();
+    h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
+    define_tool(&mut h);
+    fill(&mut h, "cam.setup.create", |f| {
+        let Form::Setup(setup) = f else { panic!("not a setup form") };
+        setup.material = "Wood".into();
+    });
+    let first = h.app.session.doc.manufacture.setups[0].id;
+    // A box stock with no size would be wanted, were the stock its own.
+    fill(&mut h, "cam.setup.create", |f| {
+        let Form::Setup(setup) = f else { panic!("not a setup form") };
+        setup.axis = 1;
+        setup.stock_from = first.to_string();
+        setup.stock_shape = 1;
+    });
+    let second = h.app.session.doc.manufacture.setups[1].clone();
+    assert_eq!((second.stock_from, second.material, second.stock), (Some(first), None, Default::default()));
+
+    // Its form has the material of the setup its stock comes from.
+    let listed = h.app.session.execute("cam.list", &json!({})).unwrap();
+    h.app.manufacture.form = setup_form(&listed["setups"][1]);
+    assert_eq!(choices(&h.app, &listed, &json!({})).material.as_deref(), Some("Wood"));
+}
+
+#[test]
 fn a_setup_in_the_same_clamping_keeps_the_clamping_origin_through_its_form() {
     use solidcraft_engine::doc::manufacture::SetupOrigin;
     let mut h = lab();
