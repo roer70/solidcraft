@@ -359,6 +359,9 @@ pub struct SetupForm {
     pub work_offset: usize,
     /// The earlier setup whose result is the stock (its id; "": the stock box).
     pub stock_from: String,
+    /// The part stays clamped as for `stock_from`'s setup and is only turned with A: the work
+    /// zero and work offset are that clamping's, so the form sends neither.
+    pub same_clamping: bool,
     /// Clamps no tool may enter, each as typed: X from, Y from, X to, Y to, top (work coordinates).
     pub clamps: Vec<[String; 5]>,
     /// Copies of the part as typed: how many along X and Y, and how far apart (empty: one part).
@@ -1150,6 +1153,7 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
             material: String::new(),
             work_offset: 0,
             stock_from: String::new(),
+            same_clamping: false,
             clamps: Vec::new(),
             copies: Default::default(),
             x_axis: 0,
@@ -1283,7 +1287,11 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
             if let Some(axis) = AXES.get(f.axis).filter(|a| **a != "custom") {
                 p.insert("axis".into(), json!(axis));
             }
+            let has_stock_from = !f.stock_from.trim().is_empty();
+            let same_clamping = f.same_clamping && has_stock_from;
             let origin = match f.origin {
+                // In the same clamping the engine keeps the clamping's origin and work offset.
+                _ if same_clamping => Value::Null,
                 3 => {
                     let (body, at) = f.edge.as_ref().ok_or("Pick a corner or an edge of the model for the work origin")?;
                     let on = EDGE_POINTS.get(f.edge_on).map_or("vertex", |e| e.0);
@@ -1302,7 +1310,13 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
                     json!({"of": if of == 1 { "part" } else { "stock" }, "x": at(0), "y": at(1), "z": at(2)})
                 }
             };
-            p.insert("origin".into(), origin);
+            if !same_clamping {
+                p.insert("origin".into(), origin);
+            }
+            // Only an edit can have one to clear; the engine clears it with `stock_from` too.
+            if same_clamping || (f.editing.is_some() && has_stock_from) {
+                p.insert("same_clamping".into(), json!(same_clamping));
+            }
             let mut stock = serde_json::Map::new();
             for (k, text) in [("side", &f.side), ("top", &f.top), ("bottom", &f.bottom)] {
                 // Emptied on an edit means no offset; left empty on a new setup too.
@@ -1339,7 +1353,9 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
             }
             p.insert("post".into(), json!(solidcraft_engine::cam::Post::BUILTIN.get(f.post).copied().unwrap_or("rs274")));
             p.insert("material".into(), if f.material.trim().is_empty() { Value::Null } else { json!(f.material.trim()) });
-            p.insert("work_offset".into(), json!(WORK_OFFSETS.get(f.work_offset).copied().unwrap_or("G54")));
+            if !same_clamping {
+                p.insert("work_offset".into(), json!(WORK_OFFSETS.get(f.work_offset).copied().unwrap_or("G54")));
+            }
             p.insert("stock_from".into(), f.stock_from.trim().parse::<u64>().map_or(Value::Null, |id| json!(id)));
             let mut clamps = Vec::new();
             for (k, c) in f.clamps.iter().enumerate() {
@@ -1739,7 +1755,13 @@ pub fn setup_form(setup: &Value) -> Option<Form> {
     let axis = named.iter().position(|d| axis.dist(Vec3::new(d.0, d.1, d.2)) < 1e-9).unwrap_or(AXES.len() - 1);
     let origin = &setup["origin"];
     let anchor = |k: &str| ANCHORS.iter().position(|a| Some(*a) == origin[k].as_str()).unwrap_or(0);
-    let at = point(&origin["at"]).unwrap_or(Vec3::ZERO);
+    // The clamping's origin has no point of its own: where it works out to, so that leaving the
+    // clamping keeps the work zero where it was.
+    let at = match origin["type"].as_str() {
+        Some("clamping") => point(&setup["frame"]["origin"]),
+        _ => point(&origin["at"]),
+    }
+    .unwrap_or(Vec3::ZERO);
     let offset = |k: &str| Some(text(&setup["stock"], k)).filter(|e| !matches!(e.as_str(), "0" | "0 mm")).unwrap_or_default();
     Some(Form::Setup(Box::new(SetupForm {
         editing: Some(setup["id"].as_u64()?),
@@ -1776,6 +1798,7 @@ pub fn setup_form(setup: &Value) -> Option<Form> {
             .filter(|i| *i < WORK_OFFSETS.len())
             .unwrap_or(0),
         stock_from: setup["stock_from"].as_u64().map(|id| id.to_string()).unwrap_or_default(),
+        same_clamping: setup["same_clamping"].as_bool().unwrap_or(false),
         clamps: setup["clamps"]
             .as_array()
             .into_iter()
@@ -3182,6 +3205,9 @@ fn help(label: &str) -> Option<&'static str> {
         "Stock from" => {
             "Where this setup's stock comes from: its own box round the part, or what an earlier setup leaves of it (the part turned over for its other side, say: the earlier setup's tool axis turned over)."
         }
+        "Same clamping" => {
+            "The part stays clamped as for the setup its stock comes from and is only turned with the A axis. Its work zero and work offset are that setup's: on the A axis, they stay put while A turns."
+        }
         "Work offset" => "Which of the machine's work offsets the program runs in: the one you zeroed on this stock. G54 is the usual one.",
         "Material" => {
             "What the stock is made of. A setup's material picks each tool's cutting data for it (a tool without any cuts with its own); in a tool, the rows below are for the material chosen here."
@@ -4223,8 +4249,19 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
                     field(ui, need, "Stock below", &mut f.bottom, "0 mm");
                 }
             }
-            choice(ui, need, "sc_cam_setup_origin", "Origin on", &mut f.origin, &ORIGINS);
-            if f.origin == 3 {
+            let same_clamping = f.same_clamping && !f.stock_from.trim().is_empty();
+            if same_clamping {
+                // The clamping's work zero and offset: nothing to choose here.
+                labelled(ui, "Origin on", |ui| {
+                    let r = ui.label(RichText::new(tm("the setup it stays clamped in")).color(Tokens::get().text_dim));
+                    explained(r, "Same clamping", None);
+                });
+            } else {
+                choice(ui, need, "sc_cam_setup_origin", "Origin on", &mut f.origin, &ORIGINS);
+            }
+            if same_clamping {
+                // Nothing more of the origin.
+            } else if f.origin == 3 {
                 // What was picked, and a button that takes what is selected now.
                 let wanted = needed(need, "Origin point");
                 labelled(ui, "Origin point", |ui| {
@@ -4263,13 +4300,24 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
                 choice(ui, need, "sc_cam_setup_z", "Origin Z", z, &["bottom", "middle", "top"]);
             }
             choice(ui, need, "sc_cam_setup_post", "Post", &mut f.post, solidcraft_engine::cam::Post::BUILTIN);
-            choice(ui, need, "sc_cam_setup_offset", "Work offset", &mut f.work_offset, &WORK_OFFSETS);
+            if !same_clamping {
+                choice(ui, need, "sc_cam_setup_offset", "Work offset", &mut f.work_offset, &WORK_OFFSETS);
+            }
             choice(ui, need, "sc_cam_setup_x", "X direction", &mut f.x_axis, &X_DIRECTIONS);
             // The setups before this one.
             let mut earlier: Vec<(String, String)> = vec![(String::new(), tm("its own stock box").into())];
             let here = f.editing.map(|id| id.to_string());
             earlier.extend(choices.setups.iter().take_while(|(id, _)| Some(id) != here.as_ref()).cloned());
             pick(ui, need, "sc_cam_setup_stock_from", "Stock from", &mut f.stock_from, &earlier);
+            // Staying clamped needs an earlier setup to stay clamped in.
+            if f.stock_from.trim().is_empty() {
+                f.same_clamping = false;
+            } else {
+                labelled(ui, "Same clamping", |ui| {
+                    let r = crate::ui_kit::checkbox(ui, tm("Stays clamped, turned with A"), &mut f.same_clamping);
+                    explained(r, "Same clamping", None);
+                });
+            }
             // Clamps: from-to across and their top, each on a row of its own.
             let mut gone = None;
             for (k, c) in f.clamps.iter_mut().enumerate() {
@@ -4602,10 +4650,12 @@ fn missing(form: &Form, lists: &Choices) -> Vec<Need> {
             }
         }
         Form::Setup(f) => {
-            if f.origin == 3 && f.edge.is_none() {
+            // In the same clamping the origin is the clamping's: nothing to fill in.
+            let own_origin = !(f.same_clamping && !empty(&f.stock_from));
+            if own_origin && f.origin == 3 && f.edge.is_none() {
                 want("Origin point", "a corner or an edge of the model: click it, then take it");
             }
-            if f.origin == 2 {
+            if own_origin && f.origin == 2 {
                 for (field, value) in [("Origin X", &f.point[0]), ("Origin Y", &f.point[1]), ("Origin Z", &f.point[2])] {
                     if empty(value) {
                         want(field, "where the work zero is, in the world");

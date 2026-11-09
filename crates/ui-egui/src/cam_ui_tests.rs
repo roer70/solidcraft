@@ -1925,6 +1925,53 @@ fn a_setup_turned_over_takes_its_stock_from_the_first() {
     assert_eq!(h.app.session.doc.manufacture.setups[1].stock_from, None);
 }
 
+/// A setup that stays clamped takes the clamping's work zero and offset: the form sends neither,
+/// keeps them through an edit, and leaving the clamping keeps the work zero where it was.
+#[test]
+fn a_setup_in_the_same_clamping_keeps_the_clamping_origin_through_its_form() {
+    use solidcraft_engine::doc::manufacture::SetupOrigin;
+    let mut h = lab();
+    h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
+    define_tool(&mut h);
+    fill(&mut h, "cam.setup.create", |f| {
+        let Form::Setup(setup) = f else { panic!("not a setup form") };
+        setup.work_offset = 1;
+    });
+    let first = h.app.session.doc.manufacture.setups[0].id;
+    fill(&mut h, "cam.setup.create", |f| {
+        let Form::Setup(setup) = f else { panic!("not a setup form") };
+        setup.axis = 1;
+        setup.stock_from = first.to_string();
+        setup.same_clamping = true;
+        // A point of the model with none picked would be wanted, were the origin its own.
+        setup.origin = 3;
+    });
+    let held = |h: &Harness| h.app.session.doc.manufacture.setups[1].clone();
+    assert_eq!((held(&h).same_clamping, held(&h).origin.clone(), held(&h).work_offset), (true, SetupOrigin::Clamping, 55));
+
+    // Its form shows it, and saving the form unchanged keeps it.
+    let form = |h: &mut Harness| {
+        let listed = h.app.session.execute("cam.list", &json!({})).unwrap();
+        let Some(Form::Setup(form)) = setup_form(&listed["setups"][1]) else { panic!("no form") };
+        (form, listed["setups"][1]["frame"]["origin"].clone())
+    };
+    let (mut edit, at) = form(&mut h);
+    assert!(edit.same_clamping);
+    h.app.manufacture.form = Some(Form::Setup(edit.clone()));
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    assert_eq!(held(&h).origin, SetupOrigin::Clamping);
+
+    // Out of the clamping, the work zero stays where the clamping had it.
+    edit.same_clamping = false;
+    h.app.manufacture.form = Some(Form::Setup(edit));
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    assert!(!held(&h).same_clamping);
+    let SetupOrigin::Point { at: now } = held(&h).origin else { panic!("{:?}", held(&h).origin) };
+    assert_eq!(json!([now.x, now.y, now.z]), at);
+}
+
 /// An operation form's rows kept as the default of its kind start the next form of that kind,
 /// its geometry and heights not; forgotten, the built-in ones start it again.
 #[test]

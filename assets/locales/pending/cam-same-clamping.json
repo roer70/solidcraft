@@ -1,0 +1,26 @@
+{
+  "en": {
+    "manufacture.same_clamping": "Same clamping",
+    "manufacture.same_clamping_help": "The part stays clamped as for the setup its stock comes from and is only turned with the A axis. Its work zero and work offset are that setup's: on the A axis, they stay put while A turns.",
+    "manufacture.stays_clamped_turned_with_a": "Stays clamped, turned with A",
+    "manufacture.the_setup_it_stays_clamped_in": "the setup it stays clamped in"
+  },
+  "de": {
+    "manufacture.same_clamping": "Gleiche Aufspannung",
+    "manufacture.same_clamping_help": "Das Teil bleibt wie in der Aufspannung, aus der sein Rohteil kommt, eingespannt und wird nur mit der A-Achse gedreht. Werkstücknullpunkt und Nullpunktverschiebung sind die dieser Aufspannung: auf der A-Achse bleiben sie stehen, während A dreht.",
+    "manufacture.stays_clamped_turned_with_a": "Bleibt eingespannt, mit A gedreht",
+    "manufacture.the_setup_it_stays_clamped_in": "die Aufspannung, in der es eingespannt bleibt"
+  },
+  "ja": {
+    "manufacture.same_clamping": "同じ固定",
+    "manufacture.same_clamping_help": "部品は素材の元になった段取りのとおり固定されたままで、A 軸で回すだけです。ワーク原点とワーク座標系はその段取りのものです。A 軸上にあるので、A が回っても動きません。",
+    "manufacture.stays_clamped_turned_with_a": "固定したまま A で回す",
+    "manufacture.the_setup_it_stays_clamped_in": "固定したままの段取り"
+  },
+  "zh": {
+    "manufacture.same_clamping": "同一装夹",
+    "manufacture.same_clamping_help": "零件保持其毛坯来源工序的装夹，只用 A 轴转动。其工件原点和工件坐标系就是那道工序的：位于 A 轴上，A 转动时保持不动。",
+    "manufacture.stays_clamped_turned_with_a": "保持装夹，用 A 轴转动",
+    "manufacture.the_setup_it_stays_clamped_in": "保持装夹的那道工序"
+  }
+}
