@@ -1925,6 +1925,27 @@ fn a_setup_turned_over_takes_its_stock_from_the_first() {
     assert_eq!(h.app.session.doc.manufacture.setups[1].stock_from, None);
 }
 
+/// Of several setups, a new operation goes into the newest unless the form names another.
+#[test]
+fn a_new_operation_goes_into_the_setup_its_form_names() {
+    let mut h = lab();
+    h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
+    define_tool(&mut h);
+    h.app.run("cam.setup.create", json!({"name": "Top"})).unwrap();
+    h.app.run("cam.setup.create", json!({"name": "Bottom", "axis": "-z", "stock_from": "Top"})).unwrap();
+    let (top, bottom) = (h.app.session.doc.manufacture.setups[0].id, h.app.session.doc.manufacture.setups[1].id);
+    fill(&mut h, "cam.op.face", |f| {
+        let Form::Op(op) = f else { panic!("not an operation form") };
+        assert_eq!(op.into, Some(bottom), "the newest setup");
+    });
+    fill(&mut h, "cam.op.face", |f| {
+        let Form::Op(op) = f else { panic!("not an operation form") };
+        op.into = Some(top);
+    });
+    let counts: Vec<usize> = h.app.session.doc.manufacture.setups.iter().map(|s| s.operations.len()).collect();
+    assert_eq!(counts, [1, 1]);
+}
+
 /// A setup that stays clamped takes the clamping's work zero and offset: the form sends neither,
 /// keeps them through an edit, and leaving the clamping keeps the work zero where it was.
 #[test]

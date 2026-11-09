@@ -1,0 +1,18 @@
+{
+  "en": {
+    "manufacture.setup_help": "Which of the design's setups the operation goes into: it cuts in that setup's stock, along its tool axis.",
+    "manufacture.the_setup_the_operation_goes_into": "the setup the operation goes into"
+  },
+  "de": {
+    "manufacture.setup_help": "In welche Aufspannung der Konstruktion die Bearbeitung kommt: sie schneidet im Rohteil dieser Aufspannung, entlang ihrer Werkzeugachse.",
+    "manufacture.the_setup_the_operation_goes_into": "die Aufspannung, in die die Bearbeitung kommt"
+  },
+  "ja": {
+    "manufacture.setup_help": "加工を入れる設計のセットアップ。そのセットアップの素材を、その工具軸に沿って削ります。",
+    "manufacture.the_setup_the_operation_goes_into": "加工を入れるセットアップ"
+  },
+  "zh": {
+    "manufacture.setup_help": "加工放入设计中的哪个设置：它在该设置的毛坯中、沿其刀具轴切削。",
+    "manufacture.the_setup_the_operation_goes_into": "加工放入的设置"
+  }
+}

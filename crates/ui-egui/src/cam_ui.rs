@@ -324,6 +324,13 @@ fn same_material(a: &str, b: &str) -> bool {
     solidcraft_engine::cam::same_material(a, b)
 }
 
+impl OpForm {
+    /// The setup the operation is in, or goes into (`None`: the design's only one).
+    fn setup(&self) -> Option<u64> {
+        self.editing.as_ref().map(|e| e.setup).or(self.into)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SetupForm {
     /// The setup being changed (`None`: a new one).
@@ -446,6 +453,8 @@ pub struct OpForm {
     pub margin: String,
     /// The operation being changed (`None`: a new one).
     pub editing: Option<Editing>,
+    /// The setup a new operation goes into (`None`: the only one).
+    pub into: Option<u64>,
     pub name: String,
     /// Picked faces (body, a point on the face); when there are any they are cut, not the sketch.
     pub faces: Vec<(String, Vec3)>,
@@ -1036,6 +1045,11 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
             limit: 0,
             margin: String::new(),
             editing: None,
+            // Of several, the newest: the one most likely being worked on.
+            into: match app.session.doc.manufacture.setups.as_slice() {
+                [] | [_] => None,
+                [.., last] => Some(last.id),
+            },
             name: String::new(),
             // Faces, and the stock a facing operation covers, give the heights themselves.
             // With a body, heights come from it and the sketch; without one, a first depth to change.
@@ -1397,6 +1411,9 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
             match &f.editing {
                 // A new operation: what is empty is left to the command.
                 None => {
+                    if let Some(setup) = f.into {
+                        p.insert("setup".into(), json!(setup));
+                    }
                     if f.faces.is_empty() {
                         match (f.kind, f.boundary) {
                             // Facing the stock is what the command does with nothing named.
@@ -1888,6 +1905,7 @@ pub fn edit_form(app: &SolveApp, setup: &Value, op: &Value) -> Option<Form> {
             faces: faces.clone(),
             face_roles: face_roles.clone(),
         }),
+        into: None,
         name: text(op, "name"),
         faces,
         face_roles,
@@ -2089,8 +2107,8 @@ pub fn apply(app: &mut SolveApp) {
 /// command names them (`None` while the form names no geometry).
 fn heights_query(f: &OpForm) -> Option<Value> {
     let mut p = serde_json::Map::new();
-    if let Some(e) = &f.editing {
-        p.insert("setup".into(), json!(e.setup));
+    if let Some(setup) = f.setup() {
+        p.insert("setup".into(), json!(setup));
     }
     if !f.faces.is_empty() {
         let faces: Vec<Value> = f.faces.iter().map(|(body, at)| json!({"body": body, "point": [at.x, at.y, at.z]})).collect();
@@ -2132,7 +2150,7 @@ fn picked_heights(app: &mut SolveApp) -> Option<(f64, f64)> {
     if app.session.selection.is_empty() {
         return None;
     }
-    let setup = f.editing.as_ref().map_or(json!({}), |e| json!({ "setup": e.setup }));
+    let setup = f.setup().map_or(json!({}), |setup| json!({ "setup": setup }));
     let key = json!({ "setup": setup, "selection": app.session.selection });
     let revision = app.session.revision;
     if let Some((r, k, h)) = &app.manufacture.selection_heights
@@ -3205,6 +3223,7 @@ fn help(label: &str) -> Option<&'static str> {
         "Stock from" => {
             "Where this setup's stock comes from: its own box round the part, or what an earlier setup leaves of it (the part turned over for its other side, say: the earlier setup's tool axis turned over)."
         }
+        "Setup" => "Which of the design's setups the operation goes into: it cuts in that setup's stock, along its tool axis.",
         "Same clamping" => {
             "The part stays clamped as for the setup its stock comes from and is only turned with the A axis. Its work zero and work offset are that setup's: on the A axis, they stay put while A turns."
         }
@@ -3641,10 +3660,10 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
             materials.push(m.to_string());
         }
     }
-    // The operation form's setup: the one it edits in, else the only one.
+    // The operation form's setup: the one it edits in or adds to, else the only one.
     let setups = listed["setups"].as_array().cloned().unwrap_or_default();
     let editing = match &app.manufacture.form {
-        Some(Form::Op(f)) => f.editing.as_ref().map(|e| e.setup),
+        Some(Form::Op(f)) => f.setup(),
         _ => None,
     };
     let setup = match editing {
@@ -4367,6 +4386,12 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
         }
         Form::Op(f) => {
             field(ui, need, "Name", &mut f.name, "automatic");
+            // Of several setups, which one a new operation goes into.
+            if f.editing.is_none() && choices.setups.len() > 1 {
+                let mut into = f.into.map(|id| id.to_string()).unwrap_or_default();
+                pick(ui, need, "sc_cam_op_setup", "Setup", &mut into, &choices.setups);
+                f.into = into.parse().ok();
+            }
             if f.faces.is_empty() {
                 // Facing covers a box: the stock's, the part's, or the one round a sketch's profiles.
                 if f.kind == OpKind::Face {
@@ -4676,6 +4701,9 @@ fn missing(form: &Form, lists: &Choices) -> Vec<Need> {
             }
         }
         Form::Op(f) => {
+            if f.setup().is_none() && lists.setups.len() > 1 {
+                want("Setup", "the setup the operation goes into");
+            }
             // Facing chooses a box instead, and 3D roughing roughs the whole stock without one.
             if f.faces.is_empty()
                 && (f.kind != OpKind::Face || f.boundary == 2)
