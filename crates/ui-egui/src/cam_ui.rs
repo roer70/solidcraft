@@ -158,6 +158,139 @@ pub enum Form {
     Tool(Box<ToolForm>),
     Setup(Box<SetupForm>),
     Op(Box<OpForm>),
+    Machine(Box<MachineForm>),
+}
+
+/// A machine of the design as its form has it: `cam.machine.add`, or `cam.machine.edit` of the
+/// machine it was opened on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MachineForm {
+    /// The machine being changed, by the name it had when the form opened (`None`: a new one).
+    pub editing: Option<String>,
+    pub name: String,
+    /// Its default post: 0 is none, else one past its index in `Post::BUILTIN`.
+    pub post: usize,
+    /// The axes in chain order, from the table to the tool.
+    pub axes: Vec<AxisRow>,
+    /// The axis the last refusal named, by its place in `axes`, and what it said.
+    pub row_error: Option<(usize, String)>,
+}
+
+/// One axis in a machine form, as typed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisRow {
+    pub rotary: bool,
+    /// Index into [`LINEAR_AXES`] or [`ROTARY_AXES`], as `rotary` says.
+    pub name: usize,
+    /// A linear axis's travel (mm, machine coordinates).
+    pub min: String,
+    pub max: String,
+    /// A rotary axis's direction: index into [`TURN_DIRECTIONS`], the last being its own
+    /// `direction`.
+    pub about: usize,
+    pub direction: [String; 3],
+    /// Carried by the head (the tool turns), else by the table (the part turns).
+    pub head: bool,
+    pub pivot: [String; 3],
+    /// Its limits in degrees; both empty: it turns round and round.
+    pub limits: [String; 2],
+}
+
+/// The names a linear axis can have.
+pub const LINEAR_AXES: [&str; 3] = ["X", "Y", "Z"];
+/// The names a rotary axis can have.
+pub const ROTARY_AXES: [&str; 3] = ["A", "B", "C"];
+/// The directions a rotary axis is picked to turn about; the last is typed.
+pub const TURN_DIRECTIONS: [(&str, [f64; 3]); 7] = [
+    ("+X", [1.0, 0.0, 0.0]),
+    ("−X", [-1.0, 0.0, 0.0]),
+    ("+Y", [0.0, 1.0, 0.0]),
+    ("−Y", [0.0, -1.0, 0.0]),
+    ("+Z", [0.0, 0.0, 1.0]),
+    ("−Z", [0.0, 0.0, -1.0]),
+    ("Other", [0.0, 0.0, 0.0]),
+];
+const AXIS_TYPES: [&str; 2] = ["Linear", "Rotary"];
+const CARRIERS: [&str; 2] = ["Table", "Head"];
+
+impl AxisRow {
+    /// A linear axis named `name` (index into [`LINEAR_AXES`]) with no travel yet.
+    pub fn linear(name: usize) -> Self {
+        AxisRow {
+            rotary: false,
+            name,
+            min: String::new(),
+            max: String::new(),
+            about: 0,
+            direction: Default::default(),
+            head: false,
+            pivot: ["0".into(), "0".into(), "0".into()],
+            limits: Default::default(),
+        }
+    }
+
+    /// The axis's name as the engine writes it.
+    pub fn label(&self) -> &'static str {
+        let names = if self.rotary { &ROTARY_AXES } else { &LINEAR_AXES };
+        names.get(self.name).copied().unwrap_or(names[0])
+    }
+}
+
+impl MachineForm {
+    /// A new machine: X, Y and Z, their travel to be typed.
+    pub fn new() -> Self {
+        MachineForm { editing: None, name: String::new(), post: 0, axes: (0..3).map(AxisRow::linear).collect(), row_error: None }
+    }
+
+    /// The form for an existing `machine`.
+    pub fn of(machine: &solidcraft_engine::doc::manufacture::Machine) -> Self {
+        use solidcraft_engine::doc::manufacture::{Carrier, MachineAxis};
+        let num = |v: f64| shown(v, 4);
+        let axes = machine
+            .axes
+            .iter()
+            .map(|axis| match axis {
+                MachineAxis::Linear { name, min, max } => AxisRow {
+                    name: LINEAR_AXES.iter().position(|n| *n == name.label()).unwrap_or(0),
+                    min: num(*min),
+                    max: num(*max),
+                    ..AxisRow::linear(0)
+                },
+                MachineAxis::Rotary { name, axis, on, pivot, limits } => {
+                    let d = [axis.x, axis.y, axis.z];
+                    let about = TURN_DIRECTIONS.iter().position(|(_, v)| *v == d).unwrap_or(TURN_DIRECTIONS.len() - 1);
+                    AxisRow {
+                        rotary: true,
+                        name: ROTARY_AXES.iter().position(|n| *n == name.label()).unwrap_or(0),
+                        min: String::new(),
+                        max: String::new(),
+                        about,
+                        direction: d.map(num),
+                        head: *on == Carrier::Head,
+                        pivot: [pivot.x, pivot.y, pivot.z].map(num),
+                        limits: limits.map_or_else(Default::default, |l| l.map(num)),
+                    }
+                }
+            })
+            .collect();
+        let post = machine.post.as_deref().and_then(|p| solidcraft_engine::cam::Post::BUILTIN.iter().position(|b| *b == p)).map_or(0, |k| k + 1);
+        MachineForm { editing: Some(machine.name.clone()), name: machine.name.clone(), post, axes, row_error: None }
+    }
+}
+
+impl Default for MachineForm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The place in `axes` of the axis an engine message about a machine names ("axis X: …", "two
+/// X axes"), if it names one.
+fn axis_named_in(message: &str, axes: &[AxisRow]) -> Option<usize> {
+    axes.iter().position(|a| {
+        let name = a.label();
+        message.contains(&format!("axis {name}:")) || message.contains(&format!("two {name} axes"))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1172,6 +1305,8 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
             copies: Default::default(),
             x_axis: 0,
         }))),
+        // A new machine; the form's Machine row opens one of the design's instead.
+        "cam.machine.add" => Some(Form::Machine(Box::default())),
         "cam.op.face" => Some(op(OpKind::Face)),
         "cam.op.contour" => Some(op(OpKind::Contour)),
         "cam.op.pocket" => Some(op(OpKind::Pocket)),
@@ -1407,6 +1542,49 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
                     Ok(("cam.setup.edit", Value::Object(p)))
                 }
                 None => Ok(("cam.setup.create", Value::Object(p))),
+            }
+        }
+        Form::Machine(f) => {
+            let name = f.name.trim();
+            if name.is_empty() {
+                return Err(tm("The machine needs a name").to_string());
+            }
+            p.insert("name".into(), json!(name));
+            let mut axes = Vec::new();
+            for a in &f.axes {
+                let label = a.label();
+                let mm = |what: &str, s: &str| number(&tf("manufacture.axis_value", &[("what", tm(what)), ("axis", label)]), s);
+                if a.rotary {
+                    let direction = match TURN_DIRECTIONS.get(a.about) {
+                        Some((_, d)) if a.about + 1 < TURN_DIRECTIONS.len() => *d,
+                        _ => [mm("Direction X", &a.direction[0])?, mm("Direction Y", &a.direction[1])?, mm("Direction Z", &a.direction[2])?],
+                    };
+                    let pivot = [mm("Pivot X", &a.pivot[0])?, mm("Pivot Y", &a.pivot[1])?, mm("Pivot Z", &a.pivot[2])?];
+                    let mut axis =
+                        json!({"type": "rotary", "name": label, "axis": direction, "on": if a.head { "head" } else { "table" }, "pivot": pivot});
+                    // Both empty: round and round.
+                    if a.limits.iter().any(|l| !l.trim().is_empty()) {
+                        axis["limits"] = json!([mm("Lower limit", &a.limits[0])?, mm("Upper limit", &a.limits[1])?]);
+                    }
+                    axes.push(axis);
+                } else {
+                    axes.push(json!({"type": "linear", "name": label, "min": mm("Travel from", &a.min)?, "max": mm("Travel to", &a.max)?}));
+                }
+            }
+            p.insert("axes".into(), json!(axes));
+            let post = f.post.checked_sub(1).and_then(|k| solidcraft_engine::cam::Post::BUILTIN.get(k));
+            match &f.editing {
+                Some(old) => {
+                    p.insert("machine".into(), json!(old));
+                    p.insert("post".into(), post.map_or(Value::Null, |p| json!(p)));
+                    Ok(("cam.machine.edit", Value::Object(p)))
+                }
+                None => {
+                    if let Some(post) = post {
+                        p.insert("post".into(), json!(post));
+                    }
+                    Ok(("cam.machine.add", Value::Object(p)))
+                }
             }
         }
         Form::Op(f) => {
@@ -2002,7 +2180,10 @@ fn with_library(library: &Option<String>, p: &mut Value) {
 
 /// Runs a command with this window's tool library, if it has one of its own.
 fn run(app: &mut SolveApp, id: &str, mut p: Value) -> Result<Value, String> {
-    with_library(&app.manufacture.library, &mut p);
+    // Machines are the design's, not the tool library's.
+    if !id.starts_with("cam.machine.") {
+        with_library(&app.manufacture.library, &mut p);
+    }
     app.manufacture.listing = None;
     app.run(id, p)
 }
@@ -2103,6 +2284,24 @@ pub fn apply(app: &mut SolveApp) {
             app.manufacture.form = None;
             app.manufacture.error = None;
         }
+        // A refusal that names one of a machine's axes is shown at that axis.
+        Err(e) => {
+            if let Some(Form::Machine(f)) = &mut app.manufacture.form {
+                f.row_error = axis_named_in(&e, &f.axes).map(|row| (row, e.clone()));
+                if f.row_error.is_some() {
+                    app.manufacture.error = None;
+                    return;
+                }
+            }
+            app.manufacture.error = Some(e);
+        }
+    }
+}
+
+/// Removes the machine the open form edits, closing the form when it goes.
+fn remove_machine(app: &mut SolveApp, name: String) {
+    match app.run("cam.machine.remove", json!({ "machine": name })) {
+        Ok(_) => (app.manufacture.form, app.manufacture.error) = (None, None),
         Err(e) => app.manufacture.error = Some(e),
     }
 }
@@ -3290,6 +3489,22 @@ fn help(label: &str) -> Option<&'static str> {
         "Coolant" => "Switch the coolant on for this operation.",
         "Peck depth" => "Drill this deep, pull back to clear the chips, and go on. Empty: in one go.",
         "Dwell" => "Seconds to wait at the bottom of each hole.",
+        "Machine" => "A new machine, or one of this design's to change. Setups name the machine they run on.",
+        "Machine name" => "What setups call the machine by. Renaming it renames it in its setups too.",
+        "Default post" => "The post a setup on this machine writes its program with when the setup names none. None: the setup keeps its own.",
+        "Axes" => {
+            "The machine's axes in order from the table to the tool: what carries what. X, Y and Z move along their names; A, B and C turn. Add one, move it nearer the table or the tool, or remove it."
+        }
+        "Axis type" => "Linear: it moves along X, Y or Z. Rotary: it turns, as A, B or C.",
+        "Axis name" => "The letter the controller calls this axis by.",
+        "Travel" => "How far the axis moves, from one end to the other, in machine coordinates (mm). After homing, often from minus the travel to 0.",
+        "Turns about" => {
+            "The direction the axis turns about, in machine coordinates. Positive turning is counter-clockwise looking back along it (the right-hand rule): an A that turns clockwise seen from X+ turns about −X."
+        }
+        "Axis direction" => "The direction the axis turns about, as X, Y and Z in machine coordinates; its length does not matter.",
+        "Pivot" => "A point on the axis's centre line, in machine coordinates (mm).",
+        "Carried by" => "Table: the part turns with the axis. Head: the tool turns with it.",
+        "Limits" => "How far the axis may turn, lowest and highest in degrees. Both empty: round and round, as a rotary table with no stops.",
         _ => return None,
     })
 }
@@ -3644,6 +3859,10 @@ struct Choices {
     bodies: Vec<String>,
     /// The selected corner or edge a setup's work origin can be put on (see [`solidcraft_engine::cam_origin_pick`]).
     origin_pick: Option<(String, Vec3, solidcraft_engine::doc::manufacture::EdgePoint)>,
+    /// The design's machines: what a machine form can open to change.
+    machines: Vec<solidcraft_engine::doc::manufacture::Machine>,
+    /// The names of the machines a setup runs on: they cannot be removed.
+    used_machines: Vec<String>,
 }
 
 type Heights = Result<(Option<f64>, Option<f64>), String>;
@@ -3750,6 +3969,8 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
         setup_posts,
         bodies,
         origin_pick: None,
+        machines: app.session.doc.manufacture.machines.clone(),
+        used_machines: app.session.doc.manufacture.setups.iter().filter_map(|s| s.machine.clone()).collect(),
     }
 }
 
@@ -4252,11 +4473,137 @@ fn face_roles_rows(ui: &mut egui::Ui, f: &mut OpForm, selected: &[(String, Vec3)
     }
 }
 
+/// Three or two number boxes sharing a row, each `id`ed by `key` and its place.
+fn boxes(ui: &mut egui::Ui, key: (&str, usize), values: &mut [String], hints: &[&str], invalid: bool, label: &str) {
+    let gap = ui.spacing().item_spacing.x;
+    let n = values.len().max(1) as f32;
+    let each = ((ui.available_width() - gap * (n - 1.0)) / n).max(0.0);
+    for (i, (text, hint)) in values.iter_mut().zip(hints).enumerate() {
+        ui.scope(|ui| {
+            ui.set_max_width(each);
+            let r = crate::ui_kit::cell_editor(
+                ui,
+                ui.make_persistent_id(("cam_machine", key.0, key.1, i)),
+                text,
+                tm(hint),
+                invalid && text.trim().is_empty(),
+            );
+            explained(r, label, None);
+        });
+    }
+}
+
+/// A machine form's rows: which machine, its name and post, and its axes table to tool. → the
+/// form of another machine of the design (or a new one) when the Machine row picks one.
+fn machine_grid(ui: &mut egui::Ui, f: &mut MachineForm, choices: &Choices, need: &[Need]) -> Option<MachineForm> {
+    // Which machine: a new one, or one of the design's to change.
+    let mut options = vec![(String::new(), tm("New machine").to_string())];
+    options.extend(choices.machines.iter().map(|m| (m.name.clone(), m.name.clone())));
+    let was = f.editing.clone().unwrap_or_default();
+    let mut which = was.clone();
+    pick(ui, need, "sc_cam_machine_which", "Machine", &mut which, &options);
+    if which != was {
+        return Some(match choices.machines.iter().find(|m| m.name == which) {
+            Some(m) => MachineForm::of(m),
+            None => MachineForm::new(),
+        });
+    }
+    field(ui, need, "Machine name", &mut f.name, "FlexiHAL");
+    let mut posts = vec!["none"];
+    posts.extend(solidcraft_engine::cam::Post::BUILTIN.iter().copied());
+    choice(ui, need, "sc_cam_machine_post", "Default post", &mut f.post, &posts);
+    let (count, mut moved, mut gone) = (f.axes.len(), None, None);
+    for (k, a) in f.axes.iter_mut().enumerate() {
+        let heading = tf("manufacture.axis_number", &[("number", &(k + 1).to_string())]);
+        crate::ui_kit::row(ui, &heading, |ui| {
+            let side = crate::ui_kit::row_height();
+            let gap = ui.spacing().item_spacing.x;
+            let each = ((ui.available_width() - 3.0 * (side + gap) - gap) / 2.0).max(0.0);
+            let mut kind = usize::from(a.rotary);
+            ui.scope(|ui| {
+                ui.set_max_width(each);
+                let labels: Vec<&str> = AXIS_TYPES.iter().map(|t| tm(t)).collect();
+                explained(crate::ui_kit::dropdown(ui, &format!("sc_cam_machine_type_{k}"), &mut kind, &labels), "Axis type", None);
+            });
+            if (kind == 1) != a.rotary {
+                a.rotary = kind == 1;
+                a.name = 0;
+            }
+            ui.scope(|ui| {
+                ui.set_max_width(each);
+                let names: &[&str] = if a.rotary { &ROTARY_AXES } else { &LINEAR_AXES };
+                explained(crate::ui_kit::dropdown(ui, &format!("sc_cam_machine_name_{k}"), &mut a.name, names), "Axis name", None);
+            });
+            if ui_kit::compact_button(ui, "↑", tm("Nearer the table"), k > 0, false).clicked() {
+                moved = Some((k, k - 1));
+            }
+            if ui_kit::compact_button(ui, "↓", tm("Nearer the tool"), k + 1 < count, false).clicked() {
+                moved = Some((k, k + 1));
+            }
+            if ui_kit::compact_button(ui, "×", tm("Remove this axis"), true, false).clicked() {
+                gone = Some(k);
+            }
+        });
+        if a.rotary {
+            labelled(ui, "Turns about", |ui| {
+                let labels: Vec<&str> = TURN_DIRECTIONS.iter().map(|(l, _)| tm(l)).collect();
+                explained(crate::ui_kit::dropdown(ui, &format!("sc_cam_machine_about_{k}"), &mut a.about, &labels), "Turns about", None);
+            });
+            if a.about + 1 >= TURN_DIRECTIONS.len() {
+                labelled(ui, "Axis direction", |ui| boxes(ui, ("direction", k), &mut a.direction, &["X", "Y", "Z"], true, "Axis direction"));
+            }
+            labelled(ui, "Pivot (mm)", |ui| boxes(ui, ("pivot", k), &mut a.pivot, &["X", "Y", "Z"], true, "Pivot"));
+            labelled(ui, "Carried by", |ui| {
+                let mut on = usize::from(a.head);
+                let labels: Vec<&str> = CARRIERS.iter().map(|c| tm(c)).collect();
+                explained(crate::ui_kit::dropdown(ui, &format!("sc_cam_machine_on_{k}"), &mut on, &labels), "Carried by", None);
+                a.head = on == 1;
+            });
+            let one_limit = a.limits.iter().filter(|l| l.trim().is_empty()).count() == 1;
+            labelled(ui, "Limits (deg)", |ui| {
+                boxes(ui, ("limits", k), &mut a.limits, &["none: continuous", "none: continuous"], one_limit, "Limits")
+            });
+        } else {
+            labelled(ui, "Travel (mm)", |ui| {
+                let mut travel = [std::mem::take(&mut a.min), std::mem::take(&mut a.max)];
+                boxes(ui, ("travel", k), &mut travel, &["from", "to"], true, "Travel");
+                [a.min, a.max] = travel;
+            });
+        }
+        if let Some((_, e)) = f.row_error.as_ref().filter(|(row, _)| *row == k) {
+            beneath(ui, |ui| crate::ui_kit::status_line(ui, e, StatusTone::Error));
+        }
+    }
+    if let Some((from, to)) = moved {
+        f.axes.swap(from, to);
+        f.row_error = None;
+    }
+    if let Some(k) = gone {
+        f.axes.remove(k);
+        f.row_error = None;
+    }
+    beneath(ui, |ui| {
+        let full = f.axes.len() >= solidcraft_engine::doc::manufacture::MAX_MACHINE_AXES;
+        if button(ui, tm("Add Axis"), ui_kit::Button::Enabled(!full)).on_hover_text(tm(help("Axes").unwrap_or_default())).clicked() {
+            // The first name no axis has yet: X, Y, Z, then A, B, C.
+            let taken = |rotary: bool, name: usize| f.axes.iter().any(|a| a.rotary == rotary && a.name == name);
+            let next = (0..3).map(|n| (false, n)).chain((0..3).map(|n| (true, n))).find(|(r, n)| !taken(*r, *n)).unwrap_or((true, 0));
+            f.axes.push(AxisRow { rotary: next.0, ..AxisRow::linear(next.1) });
+        }
+    });
+    None
+}
+
 /// The form's rows; an operation form leaves its heights in `picture` for beside them.
 fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], choices: &Choices, need: &[Need], picture: &mut Option<Picture>) {
     match form {
         // Tools have an assistant of their own (`tool_assistant`).
         Form::Tool(_) => {}
+        Form::Machine(f) => {
+            if let Some(other) = machine_grid(ui, f, choices, need) {
+                *form = Form::Machine(Box::new(other));
+            }
+        }
         Form::Setup(f) => {
             field(ui, need, "Name", &mut f.name, "automatic");
             choice(ui, need, "sc_cam_setup_axis", "Tool axis", &mut f.axis, &AXES);
@@ -4774,6 +5121,37 @@ fn missing(form: &Form, lists: &Choices) -> Vec<Need> {
                 _ => {}
             }
         }
+        Form::Machine(f) => {
+            if empty(&f.name) {
+                want("Machine name", "the machine's name");
+            }
+            if f.axes.is_empty() {
+                want("", "an axis: add one");
+            }
+            for a in &f.axes {
+                let axis = a.label();
+                let gaps = if a.rotary {
+                    let custom = a.about + 1 >= TURN_DIRECTIONS.len();
+                    let direction = custom && a.direction.iter().any(|d| empty(d));
+                    let pivot = a.pivot.iter().any(|p| empty(p));
+                    // One limit alone is no range.
+                    let limits = a.limits.iter().filter(|l| empty(l)).count() == 1;
+                    [direction, pivot, limits]
+                } else {
+                    [empty(&a.min) || empty(&a.max), false, false]
+                };
+                let what = if a.rotary {
+                    ["manufacture.axis_needs_direction", "manufacture.axis_needs_pivot", "manufacture.axis_needs_both_limits"]
+                } else {
+                    ["manufacture.axis_needs_travel", "", ""]
+                };
+                for (gap, id) in gaps.into_iter().zip(what) {
+                    if gap {
+                        want("", &tf(id, &[("axis", axis)]));
+                    }
+                }
+            }
+        }
         Form::Op(f) => {
             if f.setup().is_none() && lists.setups.len() > 1 {
                 want("Setup", "the setup the operation goes into");
@@ -4844,6 +5222,8 @@ fn form_heading(form: &Form) -> &'static str {
     match form {
         Form::Tool(f) if f.editing => "EDIT TOOL",
         Form::Tool(_) => "NEW TOOL",
+        Form::Machine(f) if f.editing.is_some() => "EDIT MACHINE",
+        Form::Machine(_) => "NEW MACHINE",
         Form::Setup(f) if f.editing.is_some() => "EDIT SETUP",
         Form::Setup(_) => "NEW SETUP",
         Form::Op(f) if f.editing.is_some() => "EDIT OPERATION",
@@ -4858,12 +5238,16 @@ fn form_title(form: &Form) -> (&'static str, String) {
         Form::Tool(_) => "cam.tool.define",
         Form::Setup(_) => "cam.setup.create",
         Form::Op(f) => f.kind.command(),
+        Form::Machine(_) => "cam.machine.add",
     };
     let spec = solidcraft_engine::find_command(command);
     let icon = spec.as_ref().map_or("", |s| s.icon);
     let title = match form {
         Form::Tool(f) if !f.editing => tm("New Tool").to_string(),
         Form::Setup(f) if f.editing.is_none() => {
+            spec.as_ref().map_or_else(|| tm(form_heading(form)).to_string(), |s| solidcraft_ui_text::tr_label(s.label).to_string())
+        }
+        Form::Machine(f) if f.editing.is_none() => {
             spec.as_ref().map_or_else(|| tm(form_heading(form)).to_string(), |s| solidcraft_ui_text::tr_label(s.label).to_string())
         }
         Form::Op(f) if f.editing.is_none() => {
@@ -4969,6 +5353,17 @@ fn form_body(ui: &mut egui::Ui, cam: &mut CamUi, selected: &[(String, Vec3)], li
                 .on_hover_text(tm("New operations of this kind start with SolidCraft's own defaults again"))
                 .clicked();
         });
+    }
+    if let Form::Machine(f) = form
+        && let Some(name) = &f.editing
+    {
+        ui.add_space(t.space_8);
+        let used = lists.used_machines.contains(name);
+        let r = button(ui, tm("Remove Machine"), ui_kit::Button::Enabled(!used))
+            .on_disabled_hover_text(tm("A setup runs on this machine: give it another machine first"));
+        if r.clicked() {
+            asked.remove_machine = Some(name.clone());
+        }
     }
     // OK stays off until nothing is missing; what is missing is said here.
     if !need.is_empty() {
@@ -5082,6 +5477,8 @@ struct Asked {
     post: Option<(u64, Option<(u64, String)>, String)>,
     import: bool,
     export: bool,
+    /// Remove the machine the open form changes, by its name.
+    remove_machine: Option<String>,
 }
 
 /// Why Simulate and Post Process are off on a setup without operations.
@@ -5756,6 +6153,9 @@ fn answer(app: &mut SolveApp, mut asked: Asked) {
     }
     if asked.apply {
         apply(app);
+    }
+    if let Some(name) = asked.remove_machine {
+        remove_machine(app, name);
     }
     if let Some(setup) = asked.simulate {
         simulate_setup(app, setup);

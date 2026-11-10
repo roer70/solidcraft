@@ -384,7 +384,7 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "SHEET METAL", panel: "RULES", promoted: 1, ids: &["sheet.manage_rules"] },
     Section { tab: "SHEET METAL", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
     // Manufacture (CAM): its commands keep their registry places (see PLACEMENTS).
-    Section { tab: "MANUFACTURE", panel: "SETUP", promoted: 2, ids: &["cam.setup.create", "cam.library.list"] },
+    Section { tab: "MANUFACTURE", panel: "SETUP", promoted: 3, ids: &["cam.setup.create", "cam.library.list", "cam.machine.add"] },
     Section {
         tab: "MANUFACTURE",
         panel: "MILLING",

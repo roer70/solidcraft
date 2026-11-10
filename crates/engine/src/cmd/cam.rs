@@ -124,6 +124,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("path: a tool library written by cam.tool.export; replace?: bool (default false: tools whose number is taken are skipped) → added, replaced, skipped: tool numbers"),
     CommandSpec::new("cam.tool.remove", "Remove Tool", tool_remove).icon("delete").params("number (refused while an operation uses it)"),
     CommandSpec::new("cam.machine.add", "Add Machine", crate::checked!("cam.machine.add", machine_add))
+        .at("MANUFACTURE", "SETUP")
         .icon("cam_setup")
         .contract(&MACHINE_ADD_CONTRACT)
         .output(output_schema_for::<MachineResult>)

@@ -687,7 +687,7 @@ fn manufacture_tab_shows_every_cam_command_with_a_drawn_icon() {
     assert!(!crate::toolbar::TABS.contains(&"MANUFACTURE"));
     let specs = solidcraft_engine::command_specs();
     let on_tab: Vec<_> = specs.iter().filter(|c| c.tab == "MANUFACTURE").collect();
-    assert_eq!(on_tab.len(), 18, "cam.op.edit and the removals are reached from the window");
+    assert_eq!(on_tab.len(), 19, "cam.op.edit and the removals are reached from the window");
     for c in on_tab {
         assert!(crate::toolbar::panels("MANUFACTURE").contains(&c.panel), "{}: panel {}", c.id, c.panel);
         assert!(c.icon.starts_with("cam_"), "{}", c.id);
@@ -2424,4 +2424,107 @@ fn the_heights_picture_lines_up_with_the_height_rows() {
             h.app.manufacture.form = None;
         }
     }
+}
+
+/// FlexiHAL as `examples/cam/flexihal.json` has it, typed into a new machine form.
+fn flexihal_form() -> MachineForm {
+    let mut f = MachineForm::new();
+    f.name = "FlexiHAL".into();
+    f.post = solidcraft_engine::cam::Post::BUILTIN.iter().position(|p| *p == "grblhal").unwrap() + 1;
+    for (a, (min, max)) in f.axes.iter_mut().zip([("-672", "0"), ("-1023", "0"), ("-160", "0")]) {
+        (a.min, a.max) = (min.into(), max.into());
+    }
+    let a = AxisRow {
+        rotary: true,
+        name: 0,
+        about: TURN_DIRECTIONS.iter().position(|(l, _)| *l == "−X").unwrap(),
+        pivot: ["0".into(), "-723".into(), "-98.08".into()],
+        ..AxisRow::linear(0)
+    };
+    f.axes.insert(0, a);
+    f
+}
+
+/// A machine typed into its form alone is the machine the example's command makes, it opens
+/// again as it was typed, and a change to it is one undo step.
+#[test]
+fn a_machine_is_entered_in_its_form_and_changed_in_one_step() {
+    let mut h = lab();
+    h.app.start("cam.machine.add");
+    assert!(matches!(h.app.manufacture.form, Some(Form::Machine(_))), "Add Machine opens the machine form");
+    h.frames(2);
+    h.app.manufacture.form = Some(Form::Machine(Box::new(flexihal_form())));
+    h.frames(2);
+    assert_eq!(ok_enabled(&h), Some(true), "nothing is missing");
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    assert!(h.app.manufacture.form.is_none(), "the form closes on OK");
+
+    // The same machine as the example's command.
+    let mut s = solidcraft_engine::Session::default();
+    s.execute(
+        "cam.machine.add",
+        &json!({"name": "FlexiHAL", "post": "grblhal", "axes": [
+            {"type": "rotary", "name": "A", "axis": [-1, 0, 0], "on": "table", "pivot": [0, -723, -98.08]},
+            {"type": "linear", "name": "X", "min": -672, "max": 0},
+            {"type": "linear", "name": "Y", "min": -1023, "max": 0},
+            {"type": "linear", "name": "Z", "min": -160, "max": 0}
+        ]}),
+    )
+    .unwrap();
+    let listed = h.app.session.execute("cam.machine.list", &json!({})).unwrap();
+    assert_eq!(listed, s.execute("cam.machine.list", &json!({})).unwrap());
+
+    // Opened again it shows what was typed; the pivot moved is one step to undo.
+    let machine = h.app.session.doc.manufacture.machines[0].clone();
+    let mut f = MachineForm::of(&machine);
+    let mut typed = flexihal_form();
+    typed.editing = Some("FlexiHAL".into());
+    // Its direction is also in the boxes Other shows, to start from.
+    typed.axes[0].direction = ["-1".into(), "0".into(), "0".into()];
+    assert_eq!(f, typed);
+    f.axes[0].pivot[2] = "-90".into();
+    h.app.manufacture.form = Some(Form::Machine(Box::new(f)));
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    let pivot = |h: &Harness| match &h.app.session.doc.manufacture.machines[0].axes[0] {
+        solidcraft_engine::doc::manufacture::MachineAxis::Rotary { pivot, .. } => pivot.z,
+        other => panic!("not rotary: {other:?}"),
+    };
+    assert_eq!(pivot(&h), -90.0);
+    h.app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(pivot(&h), -98.08);
+}
+
+/// A refusal that names an axis is shown at that axis, and the form stays open with it.
+#[test]
+fn a_machine_axis_the_engine_refuses_shows_its_error_at_its_row() {
+    let mut h = lab();
+    h.app.start("cam.machine.add");
+    let mut f = flexihal_form();
+    // Y's travel the wrong way round.
+    (f.axes[2].min, f.axes[2].max) = ("0".into(), "-1023".into());
+    h.app.manufacture.form = Some(Form::Machine(Box::new(f)));
+    apply(&mut h.app);
+    let Some(Form::Machine(f)) = &h.app.manufacture.form else { panic!("the form stays open") };
+    let (row, e) = f.row_error.clone().expect("an error at a row");
+    assert_eq!((row, f.axes[row].label()), (2, "Y"), "{e}");
+    assert_eq!(h.app.manufacture.error, None, "said at the row, not above the form");
+    h.frames(2);
+    assert!(h.app.session.doc.manufacture.machines.is_empty());
+}
+
+/// What a machine form still needs: a name, an axis's travel, a typed direction, both limits.
+#[test]
+fn a_machine_form_says_what_it_still_needs() {
+    let lists = Choices::default();
+    let mut f = flexihal_form();
+    assert!(missing(&Form::Machine(Box::new(f.clone())), &lists).is_empty());
+    f.name.clear();
+    f.axes[1].max.clear();
+    f.axes[0].about = TURN_DIRECTIONS.len() - 1;
+    f.axes[0].limits[0] = "-90".into();
+    let need = missing(&Form::Machine(Box::new(f)), &lists);
+    assert_eq!(need.len(), 4, "{need:?}");
+    assert_eq!(need[0].field, "Machine name");
 }

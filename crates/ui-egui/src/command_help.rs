@@ -377,6 +377,7 @@ mod tests {
     const CAM_WAITING: &[&str] = &[
         "cam.library.list",
         "cam.list",
+        "cam.machine.add",
         "cam.op.adaptive",
         "cam.op.adaptive3d",
         "cam.op.bore",
