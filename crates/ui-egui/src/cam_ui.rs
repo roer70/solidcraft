@@ -4598,12 +4598,18 @@ fn face_roles_rows(ui: &mut egui::Ui, f: &mut OpForm, selected: &[(String, Vec3)
     }
 }
 
-/// Three or two number boxes sharing a row, each `id`ed by `key` and its place.
-fn boxes(ui: &mut egui::Ui, key: (&str, usize), values: &mut [String], hints: &[&str], invalid: bool, label: &str) {
+/// Three or two number boxes sharing a row, each `id`ed by `key` and its place. `tagged`: each
+/// hint also stands before its box, so it is seen with a number typed (X, Y, Z).
+fn boxes(ui: &mut egui::Ui, key: (&str, usize), values: &mut [String], hints: &[&str], invalid: bool, label: &str, tagged: bool) {
+    let t = Tokens::get();
     let gap = ui.spacing().item_spacing.x;
     let n = values.len().max(1) as f32;
-    let each = ((ui.available_width() - gap * (n - 1.0)) / n).max(0.0);
+    let tag = if tagged { t.space_12 + gap } else { 0.0 };
+    let each = ((ui.available_width() - gap * (n - 1.0)) / n - tag).max(0.0);
     for (i, (text, hint)) in values.iter_mut().zip(hints).enumerate() {
+        if tagged {
+            ui.add_sized(egui::vec2(t.space_12, crate::ui_kit::row_height()), egui::Label::new(RichText::new(tm(hint)).color(t.text_dim)));
+        }
         ui.scope(|ui| {
             ui.set_max_width(each);
             let r = crate::ui_kit::cell_editor(
@@ -4675,9 +4681,9 @@ fn machine_grid(ui: &mut egui::Ui, f: &mut MachineForm, choices: &Choices, need:
                 explained(crate::ui_kit::dropdown(ui, &format!("sc_cam_machine_about_{k}"), &mut a.about, &labels), "Turns about", None);
             });
             if a.about + 1 >= TURN_DIRECTIONS.len() {
-                labelled(ui, "Axis direction", |ui| boxes(ui, ("direction", k), &mut a.direction, &["X", "Y", "Z"], true, "Axis direction"));
+                labelled(ui, "Axis direction", |ui| boxes(ui, ("direction", k), &mut a.direction, &["X", "Y", "Z"], true, "Axis direction", true));
             }
-            labelled(ui, "Pivot (mm)", |ui| boxes(ui, ("pivot", k), &mut a.pivot, &["X", "Y", "Z"], true, "Pivot"));
+            labelled(ui, "Pivot (mm)", |ui| boxes(ui, ("pivot", k), &mut a.pivot, &["X", "Y", "Z"], true, "Pivot", true));
             labelled(ui, "Carried by", |ui| {
                 let mut on = usize::from(a.head);
                 let labels: Vec<&str> = CARRIERS.iter().map(|c| tm(c)).collect();
@@ -4686,12 +4692,12 @@ fn machine_grid(ui: &mut egui::Ui, f: &mut MachineForm, choices: &Choices, need:
             });
             let one_limit = a.limits.iter().filter(|l| l.trim().is_empty()).count() == 1;
             labelled(ui, "Limits (deg)", |ui| {
-                boxes(ui, ("limits", k), &mut a.limits, &["none: continuous", "none: continuous"], one_limit, "Limits")
+                boxes(ui, ("limits", k), &mut a.limits, &["none: continuous", "none: continuous"], one_limit, "Limits", false)
             });
         } else {
             labelled(ui, "Travel (mm)", |ui| {
                 let mut travel = [std::mem::take(&mut a.min), std::mem::take(&mut a.max)];
-                boxes(ui, ("travel", k), &mut travel, &["from", "to"], true, "Travel");
+                boxes(ui, ("travel", k), &mut travel, &["from", "to"], true, "Travel", false);
                 [a.min, a.max] = travel;
             });
         }
