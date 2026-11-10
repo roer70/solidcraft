@@ -4243,7 +4243,7 @@ fn list_now(s: &Session) -> Value {
                 })
                 .collect();
             let mut v = json!({"id": setup.id, "name": setup.name, "axis": setup.axis, "origin": setup.origin, "stock": setup.stock, "bodies": setup.bodies, "fixtures": setup.fixtures,
-                "material": setup.material, "post": setup.post, "work_offset": setup.work_offset, "x_axis": setup.x_axis, "stock_from": setup.stock_from, "same_clamping": setup.same_clamping, "clamps": setup.clamps, "copies": setup.copies, "tool_changes": tool_changes(setup), "operations": ops});
+                "material": setup.material, "machine": setup.machine, "post": setup.post, "work_offset": setup.work_offset, "x_axis": setup.x_axis, "stock_from": setup.stock_from, "same_clamping": setup.same_clamping, "clamps": setup.clamps, "copies": setup.copies, "tool_changes": tool_changes(setup), "operations": ops});
             // Worked out against the model: the work frame in the world, and the boxes in work coordinates.
             match resolve(s, setup) {
                 Ok(at) => {

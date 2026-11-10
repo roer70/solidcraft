@@ -2514,6 +2514,49 @@ fn a_machine_axis_the_engine_refuses_shows_its_error_at_its_row() {
     assert!(h.app.session.doc.manufacture.machines.is_empty());
 }
 
+/// A setup's form says which of the design's machines it runs on: the setup gets it, opens with
+/// it again, and loses it when set back to none; one in the same clamping sends none of its own.
+#[test]
+fn a_setup_form_picks_the_machine_it_runs_on() {
+    let mut h = lab();
+    h.app.run("solid.box", json!({"length": 60, "width": 40, "height": 10})).unwrap();
+    h.app.manufacture.form = Some(Form::Machine(Box::new(flexihal_form())));
+    apply(&mut h.app);
+    let grblhal = solidcraft_engine::cam::Post::BUILTIN.iter().position(|p| *p == "grblhal").unwrap();
+    fill(&mut h, "cam.setup.create", |f| {
+        let Form::Setup(setup) = f else { panic!("not a setup form") };
+        assert_eq!(setup.machine, "", "a new setup runs on no machine");
+        (setup.name, setup.machine, setup.post) = ("Top".into(), "FlexiHAL".into(), grblhal);
+    });
+    let top = h.app.session.doc.manufacture.setups[0].clone();
+    assert_eq!((top.machine.as_deref(), top.post.as_str()), (Some("FlexiHAL"), "grblhal"), "{:?}", h.app.manufacture.error);
+    let listed = h.app.session.execute("cam.list", &json!({})).unwrap();
+    let Some(Form::Setup(mut form)) = setup_form(&listed["setups"][0]) else { panic!("no form") };
+    assert_eq!(form.machine, "FlexiHAL", "opened again it shows the machine");
+
+    // Turned over in the same clamping: the machine is the clamping's, and the form sends none.
+    h.app.run("cam.setup.create", json!({"name": "Bottom", "axis": "-z", "stock_from": "Top", "same_clamping": true})).unwrap();
+    let listed = h.app.session.execute("cam.list", &json!({})).unwrap();
+    let Some(Form::Setup(mut bottom)) = setup_form(&listed["setups"][1]) else { panic!("no form") };
+    assert_eq!(bottom.machine, "FlexiHAL");
+    bottom.machine.clear();
+    bottom.name = "Underside".into();
+    h.app.manufacture.form = Some(Form::Setup(bottom));
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    let underside = &h.app.session.doc.manufacture.setups[1];
+    assert_eq!((underside.name.as_str(), underside.machine.as_deref()), ("Underside", Some("FlexiHAL")));
+
+    // Set back to none, the setup runs on no machine; the machine can then go.
+    h.app.run("cam.setup.remove", json!({"setup": "Underside"})).unwrap();
+    form.machine.clear();
+    h.app.manufacture.form = Some(Form::Setup(form));
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    assert_eq!(h.app.session.doc.manufacture.setups[0].machine, None);
+    h.app.run("cam.machine.remove", json!({"machine": "FlexiHAL"})).unwrap();
+}
+
 /// What a machine form still needs: a name, an axis's travel, a typed direction, both limits.
 #[test]
 fn a_machine_form_says_what_it_still_needs() {

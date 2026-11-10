@@ -55,7 +55,10 @@
     "manufacture.axis_direction_help": "The direction the axis turns about, as X, Y and Z in machine coordinates; its length does not matter.",
     "manufacture.pivot_help": "A point on the axis's centre line, in machine coordinates (mm).",
     "manufacture.carried_by_help": "Table: the part turns with the axis. Head: the tool turns with it.",
-    "manufacture.limits_help": "How far the axis may turn, lowest and highest in degrees. Both empty: round and round, as a rotary table with no stops."
+    "manufacture.limits_help": "How far the axis may turn, lowest and highest in degrees. Both empty: round and round, as a rotary table with no stops.",
+    "manufacture.runs_on": "Runs on",
+    "manufacture.no_machine": "no machine: three axes",
+    "manufacture.runs_on_help": "The machine of this design the setup runs on: its axes and its default post. A rotary A turns the part for a setup whose tool axis is not Z. No machine: a three-axis mill."
   },
   "de": {
     "manufacture.new_machine": "Neue Maschine",
@@ -113,7 +116,10 @@
     "manufacture.axis_direction_help": "Die Drehrichtung der Achse als X, Y und Z in Maschinenkoordinaten; ihre Länge spielt keine Rolle.",
     "manufacture.pivot_help": "Ein Punkt auf der Mittellinie der Achse, in Maschinenkoordinaten (mm).",
     "manufacture.carried_by_help": "Tisch: das Teil dreht mit der Achse. Kopf: das Werkzeug dreht mit ihr.",
-    "manufacture.limits_help": "Wie weit die Achse drehen darf, tiefster und höchster Wert in Grad. Beide leer: endlos, wie ein Rundtisch ohne Anschläge."
+    "manufacture.limits_help": "Wie weit die Achse drehen darf, tiefster und höchster Wert in Grad. Beide leer: endlos, wie ein Rundtisch ohne Anschläge.",
+    "manufacture.runs_on": "Läuft auf",
+    "manufacture.no_machine": "keine Maschine: drei Achsen",
+    "manufacture.runs_on_help": "Die Maschine dieses Entwurfs, auf der die Aufspannung läuft: ihre Achsen und ihr Standard-Postprozessor. Eine Drehachse A dreht das Teil für eine Aufspannung, deren Werkzeugachse nicht Z ist. Keine Maschine: eine Dreiachsfräse."
   },
   "ja": {
     "manufacture.new_machine": "新しい機械",
@@ -171,7 +177,10 @@
     "manufacture.axis_direction_help": "軸の回転方向を機械座標の X・Y・Z で表します。長さは関係ありません。",
     "manufacture.pivot_help": "軸の中心線上の点(機械座標、mm)。",
     "manufacture.carried_by_help": "テーブル: 部品が軸と一緒に回ります。ヘッド: 工具が一緒に回ります。",
-    "manufacture.limits_help": "軸が回転できる範囲(最小と最大、度)。両方空: ストッパーのない回転テーブルのように無限に回ります。"
+    "manufacture.limits_help": "軸が回転できる範囲(最小と最大、度)。両方空: ストッパーのない回転テーブルのように無限に回ります。",
+    "manufacture.runs_on": "使用する機械",
+    "manufacture.no_machine": "機械なし: 3 軸",
+    "manufacture.runs_on_help": "このセットアップを実行する、この設計の機械です。その軸と既定のポストを使います。工具軸が Z でないセットアップでは、回転軸 A が部品を回します。機械なし: 3 軸フライス盤。"
   },
   "zh": {
     "manufacture.new_machine": "新机床",
@@ -229,7 +238,10 @@
     "manufacture.axis_direction_help": "轴的旋转方向，以机床坐标的 X、Y、Z 表示；长度无关。",
     "manufacture.pivot_help": "轴中心线上的一点，机床坐标 (mm)。",
     "manufacture.carried_by_help": "工作台：零件随轴旋转。主轴头：刀具随轴旋转。",
-    "manufacture.limits_help": "轴可旋转的范围，最低与最高（度）。两者均为空：无限旋转，如同无限位的转台。"
+    "manufacture.limits_help": "轴可旋转的范围，最低与最高（度）。两者均为空：无限旋转，如同无限位的转台。",
+    "manufacture.runs_on": "运行机床",
+    "manufacture.no_machine": "无机床：三轴",
+    "manufacture.runs_on_help": "此设置运行所用的本设计机床：其轴和默认后处理器。工具轴不是 Z 的设置由旋转轴 A 转动零件。无机床：三轴铣床。"
   },
   "sv": {
     "manufacture.new_machine": "Ny maskin",
@@ -287,6 +299,9 @@
     "manufacture.axis_direction_help": "Riktningen axeln vrider runt, som X, Y och Z i maskinkoordinater; längden spelar ingen roll.",
     "manufacture.pivot_help": "En punkt på axelns centrumlinje, i maskinkoordinater (mm).",
     "manufacture.carried_by_help": "Bord: detaljen vrider med axeln. Huvud: verktyget vrider med den.",
-    "manufacture.limits_help": "Hur långt axeln får vrida, lägst och högst i grader. Båda tomma: varv på varv, som ett vridbord utan stopp."
+    "manufacture.limits_help": "Hur långt axeln får vrida, lägst och högst i grader. Båda tomma: varv på varv, som ett vridbord utan stopp.",
+    "manufacture.runs_on": "Körs på",
+    "manufacture.no_machine": "ingen maskin: tre axlar",
+    "manufacture.runs_on_help": "Den av designens maskiner som uppspänningen körs på: dess axlar och standardpost. En roterande A vrider detaljen för en uppspänning vars verktygsaxel inte är Z. Ingen maskin: en treaxlig fräs."
   }
 }

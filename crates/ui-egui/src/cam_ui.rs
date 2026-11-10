@@ -492,6 +492,8 @@ pub struct SetupForm {
     pub bodies: String,
     /// The bodies that hold the stock, as typed: names apart by commas (empty: none).
     pub fixtures: String,
+    /// The machine of the design it runs on, by name ("": none, a three-axis mill).
+    pub machine: String,
     pub post: usize,
     /// What the stock is made of ("": not said).
     pub material: String,
@@ -1296,6 +1298,7 @@ pub fn start(app: &mut SolveApp, id: &str) -> bool {
             bottom: String::new(),
             bodies: String::new(),
             fixtures: String::new(),
+            machine: String::new(),
             post: 0,
             material: String::new(),
             work_offset: 0,
@@ -1503,6 +1506,7 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
             }
             // In a clamping, the machine and post are its first setup's.
             if !same_clamping {
+                p.insert("machine".into(), if f.machine.is_empty() { Value::Null } else { json!(f.machine) });
                 p.insert("post".into(), json!(solidcraft_engine::cam::Post::BUILTIN.get(f.post).copied().unwrap_or("rs274")));
             }
             p.insert("material".into(), if f.material.trim().is_empty() { Value::Null } else { json!(f.material.trim()) });
@@ -1989,6 +1993,7 @@ pub fn setup_form(setup: &Value) -> Option<Form> {
         bottom: offset("bottom"),
         bodies: setup["bodies"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
         fixtures: setup["fixtures"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
+        machine: text(setup, "machine"),
         post: solidcraft_engine::cam::Post::BUILTIN.iter().position(|p| Some(*p) == setup["post"].as_str()).unwrap_or(0),
         material: text(setup, "material"),
         work_offset: setup["work_offset"]
@@ -3490,6 +3495,9 @@ fn help(label: &str) -> Option<&'static str> {
         "Peck depth" => "Drill this deep, pull back to clear the chips, and go on. Empty: in one go.",
         "Dwell" => "Seconds to wait at the bottom of each hole.",
         "Machine" => "A new machine, or one of this design's to change. Setups name the machine they run on.",
+        "Runs on" => {
+            "The machine of this design the setup runs on: its axes and its default post. A rotary A turns the part for a setup whose tool axis is not Z. No machine: a three-axis mill."
+        }
         "Machine name" => "What setups call the machine by. Renaming it renames it in its setups too.",
         "Default post" => "The post a setup on this machine writes its program with when the setup names none. None: the setup keeps its own.",
         "Axes" => {
@@ -3855,6 +3863,8 @@ struct Choices {
     setups: Vec<(String, String)>,
     /// Each setup's post, by id: what a setup taking its stock from it starts on.
     setup_posts: Vec<(String, String)>,
+    /// Each setup's machine, by id ("": none): what a setup taking its stock from it starts on.
+    setup_machines: Vec<(String, String)>,
     /// The bodies the selection is on, each once: what a setup can take as its part.
     bodies: Vec<String>,
     /// The selected corner or edge a setup's work origin can be put on (see [`solidcraft_engine::cam_origin_pick`]).
@@ -3943,6 +3953,7 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
     let setups = listed["setups"].as_array().into_iter().flatten().filter_map(|x| Some((x["id"].as_u64()?.to_string(), text(x, "name")))).collect();
     let setup_posts =
         listed["setups"].as_array().into_iter().flatten().filter_map(|x| Some((x["id"].as_u64()?.to_string(), text(x, "post")))).collect();
+    let setup_machines = app.session.doc.manufacture.setups.iter().map(|x| (x.id.to_string(), x.machine.clone().unwrap_or_default())).collect();
     let mut bodies: Vec<String> = Vec::new();
     for item in &app.session.selection {
         let name = match item {
@@ -3967,6 +3978,7 @@ fn choices(app: &SolveApp, listed: &Value, library: &Value) -> Choices {
         material,
         setups,
         setup_posts,
+        setup_machines,
         bodies,
         origin_pick: None,
         machines: app.session.doc.manufacture.machines.clone(),
@@ -4657,6 +4669,11 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
             {
                 f.post = k;
             }
+            if f.stock_from != was
+                && let Some((_, machine)) = choices.setup_machines.iter().find(|(id, _)| *id == f.stock_from)
+            {
+                f.machine = machine.clone();
+            }
             // The setup it takes its stock from, by name.
             let from = choices.setups.iter().find(|(id, _)| *id == f.stock_from.trim()).map(|(_, name)| name.clone());
             // Staying clamped needs an earlier setup to stay clamped in.
@@ -4737,6 +4754,37 @@ fn form_grid(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], ch
                 choice(ui, need, "sc_cam_setup_x", "Origin X", x, &["min", "centre", "max"]);
                 choice(ui, need, "sc_cam_setup_y", "Origin Y", y, &["min", "centre", "max"]);
                 choice(ui, need, "sc_cam_setup_z", "Origin Z", z, &["bottom", "middle", "top"]);
+            }
+            match (&from, choices.setup_machines.iter().find(|(id, _)| *id == f.stock_from.trim())) {
+                // The clamping's machine: nothing to choose here.
+                (Some(setup), Some((_, machine))) if same_clamping => labelled(ui, "Runs on", |ui| {
+                    let name = if machine.is_empty() { tm("no machine: three axes") } else { machine.as_str() };
+                    let r = ui.label(
+                        RichText::new(tf("manufacture.material_from_setup", &[("material", name), ("setup", setup)])).color(Tokens::get().text_dim),
+                    );
+                    explained(r, "Same clamping", None);
+                }),
+                _ => {
+                    let mut options = vec![(String::new(), tm("no machine: three axes").to_string())];
+                    options.extend(choices.machines.iter().map(|m| (m.name.clone(), m.name.clone())));
+                    // One the design no longer has (renamed elsewhere): kept until another is picked.
+                    if !f.machine.is_empty() && !options.iter().any(|(k, _)| *k == f.machine) {
+                        options.push((f.machine.clone(), f.machine.clone()));
+                    }
+                    let was = f.machine.clone();
+                    pick(ui, need, "sc_cam_setup_machine", "Runs on", &mut f.machine, &options);
+                    // A machine newly picked brings its default post, as the engine gives it.
+                    if f.machine != was
+                        && let Some(k) = choices
+                            .machines
+                            .iter()
+                            .find(|m| m.name == f.machine)
+                            .and_then(|m| m.post.as_deref())
+                            .and_then(|post| solidcraft_engine::cam::Post::BUILTIN.iter().position(|p| *p == post))
+                    {
+                        f.post = k;
+                    }
+                }
             }
             match (&from, choices.setup_posts.iter().find(|(id, _)| *id == f.stock_from.trim())) {
                 // The clamping's machine and post: nothing to choose here.
