@@ -25,11 +25,43 @@ pub(crate) struct RecentRow<'a> {
     pub thumbnail_failed: bool,
 }
 
+/// A picture the host gives a kit surface: a name in the kit's icon set, a texture the host made
+/// (its own app icon, say), or the host's own painter, called with the icon's rect and opacity.
+#[derive(Clone, Copy)]
+pub enum Icon<'a> {
+    Kit(&'a str),
+    Texture(TextureId),
+    Paint(&'a dyn Fn(&egui::Painter, Rect, f32)),
+}
+
+impl<'a> From<&'a str> for Icon<'a> {
+    fn from(name: &'a str) -> Self {
+        Icon::Kit(name)
+    }
+}
+
+impl Icon<'_> {
+    pub(crate) fn paint(&self, painter: &egui::Painter, rect: Rect, opacity: f32) {
+        match self {
+            Icon::Kit(name) => crate::ui_kit::icons::paint_accented(painter, rect, name, None, opacity),
+            Icon::Texture(texture) => {
+                painter.image(
+                    *texture,
+                    rect,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Tokens::get().file_image_tint.gamma_multiply(opacity),
+                );
+            }
+            Icon::Paint(paint) => paint(painter, rect, opacity),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct SampleCard<'a> {
     pub title: &'a str,
     pub description: &'a str,
-    pub icon: &'a str,
+    pub icon: Icon<'a>,
     pub thumbnail: Option<(TextureId, Vec2)>,
 }
 
@@ -119,14 +151,14 @@ impl FileView {
 
     pub(crate) fn title(ui: &mut Ui, title: &str) {
         let t = Tokens::get();
-        let galley = ui.painter().layout_no_wrap(title.to_owned(), crate::fonts::semibold(t.font_start_title), t.form_ink);
+        let galley = ui.painter().layout_no_wrap(title.to_owned(), crate::ui_kit::type_face::semibold(t.font_start_title), t.form_ink);
         let (rect, _) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), galley.size().y), Sense::hover());
         ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).galley(rect.min, galley, t.form_ink);
     }
 
     pub(crate) fn section_title(ui: &mut Ui, title: &str) {
         let t = Tokens::get();
-        let galley = ui.painter().layout_no_wrap(title.to_owned(), crate::fonts::semibold(t.font_intro), t.form_ink);
+        let galley = ui.painter().layout_no_wrap(title.to_owned(), crate::ui_kit::type_face::semibold(t.font_intro), t.form_ink);
         let (rect, _) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), galley.size().y), Sense::hover());
         ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).galley(rect.min, galley, t.form_ink);
     }
@@ -174,7 +206,7 @@ impl FileView {
                 ui,
                 label_rect,
                 label,
-                if selected { crate::fonts::semibold(t.font_heading) } else { FontId::proportional(t.font_heading) },
+                if selected { crate::ui_kit::type_face::semibold(t.font_heading) } else { FontId::proportional(t.font_heading) },
                 ink,
                 false,
             );
@@ -199,7 +231,7 @@ impl FileView {
         }
         let inner = rect.shrink2(vec2(t.space_12, 0.0));
         let icon = Rect::from_center_size(pos2(inner.left() + t.form_icon_size / 2.0, inner.center().y), Vec2::splat(t.form_icon_size));
-        crate::icons::paint_ink_mirrored(ui.painter(), icon, "chevron_right", t.file_rail_ink);
+        crate::ui_kit::icons::paint_ink_mirrored(ui.painter(), icon, "chevron_right", t.file_rail_ink);
         let key = ui.painter().layout_no_wrap(shortcut.to_owned(), FontId::monospace(t.font_small), t.file_rail_ink);
         let key_rect = Rect::from_center_size(
             pos2(inner.right() - (key.size().x + t.space_10) / 2.0, inner.center().y),
@@ -211,7 +243,7 @@ impl FileView {
         let mut job = egui::text::LayoutJob::default();
         for (text, font) in [
             (before, FontId::proportional(t.font_button)),
-            (document, crate::fonts::semibold(t.font_button)),
+            (document, crate::ui_kit::type_face::semibold(t.font_button)),
             (after, FontId::proportional(t.font_button)),
         ] {
             job.append(text, 0.0, egui::TextFormat::simple(font, t.file_rail_ink));
@@ -245,17 +277,26 @@ impl FileView {
         ui.add_space(t.space_10);
     }
 
-    pub(crate) fn action_tile(ui: &mut Ui, id: &str, width: f32, icon: &str, label: &str, subtitle: &str, primary: bool) -> Response {
+    pub(crate) fn action_tile<'a>(
+        ui: &mut Ui,
+        id: &str,
+        width: f32,
+        icon: impl Into<Icon<'a>>,
+        label: &str,
+        subtitle: &str,
+        primary: bool,
+    ) -> Response {
         let t = Tokens::get();
         let (rect, response) = allocate(ui, id, width, t.file_tile_height, label);
         card(ui, rect, &response, primary);
         let inner = rect.shrink(t.space_16);
         let icon_size = t.file_tile_icon.min(inner.height()).min(inner.width());
         let icon_rect = Rect::from_center_size(pos2(inner.left() + icon_size / 2.0, inner.center().y), Vec2::splat(icon_size));
-        crate::icons::paint_accented(ui.painter(), icon_rect, icon, None, if ui.is_enabled() { 1.0 } else { 0.45 });
+        icon.into().paint(ui.painter(), icon_rect, if ui.is_enabled() { 1.0 } else { 0.45 });
         let text_rect = Rect::from_min_max(pos2((icon_rect.right() + t.space_14).min(inner.right()), inner.top()), inner.max);
         let ink = if primary { t.file_primary_ink } else { t.form_ink };
-        let mut title_job = egui::text::LayoutJob::simple(label.to_owned(), crate::fonts::semibold(t.font_heading), ink, text_rect.width());
+        let mut title_job =
+            egui::text::LayoutJob::simple(label.to_owned(), crate::ui_kit::type_face::semibold(t.font_heading), ink, text_rect.width());
         title_job.wrap.max_rows = 1;
         let title = ui.fonts_mut(|fonts| fonts.layout_job(title_job));
         let mut caption_job = egui::text::LayoutJob::simple(subtitle.to_owned(), FontId::proportional(t.font_label), t.file_dim, text_rect.width());
@@ -292,7 +333,7 @@ impl FileView {
             // A design whose picture could not be made shows a fainter box, so it reads as "no
             // preview" rather than as one still being drawn.
             let opacity = if row.thumbnail_failed { 0.4 } else { 1.0 };
-            crate::icons::paint_accented(
+            crate::ui_kit::icons::paint_accented(
                 ui.painter(),
                 Rect::from_center_size(preview.center(), Vec2::splat(t.space_24.min(preview.height()))),
                 "box",
@@ -309,7 +350,7 @@ impl FileView {
                 ui,
                 Rect::from_min_max(content.min, pos2(content.right(), half)),
                 row.title,
-                crate::fonts::medium(t.font_button),
+                crate::ui_kit::type_face::medium(t.font_button),
                 t.form_ink,
                 false,
             );
@@ -334,7 +375,7 @@ impl FileView {
                 ui,
                 Rect::from_min_max(content.min, pos2(left + title_width, content.bottom())),
                 row.title,
-                crate::fonts::medium(t.font_button),
+                crate::ui_kit::type_face::medium(t.font_button),
                 t.form_ink,
                 false,
             );
@@ -475,7 +516,8 @@ fn recovery_panel(
         |ui| {
             let width = dimension(ui.available_width());
             let button_width = |text: &str| {
-                ui.painter().layout_no_wrap(text.to_owned(), crate::fonts::semibold(t.font_heading), t.form_ink).size().x + t.space_14 * 2.0
+                ui.painter().layout_no_wrap(text.to_owned(), crate::ui_kit::type_face::semibold(t.font_heading), t.form_ink).size().x
+                    + t.space_14 * 2.0
             };
             let recover_width = button_width(recover);
             let discard_width = discard.map_or(0.0, button_width);
@@ -485,7 +527,7 @@ fn recovery_panel(
             let text_width = (width - icon_width - if wrapped { 0.0 } else { actions_width + t.space_14 }).max(0.0);
             let mut job = egui::text::LayoutJob::default();
             for (text, font) in [
-                (message.title, crate::fonts::semibold(t.font_button)),
+                (message.title, crate::ui_kit::type_face::semibold(t.font_button)),
                 (message.before_filename, FontId::proportional(t.font_button)),
                 (message.filename, FontId::monospace(t.font_button)),
                 (message.after_filename, FontId::proportional(t.font_button)),
@@ -502,7 +544,7 @@ fn recovery_panel(
                 let well =
                     Rect::from_min_size(pos2(rect.left(), rect.top() + (top_height - t.file_recovery_icon) / 2.0), Vec2::splat(t.file_recovery_icon));
                 ui.painter().rect_filled(well, t.radius_lg, t.file_recovery_well);
-                crate::icons::paint_accented(ui.painter(), well.shrink(t.space_6), "status_recovery", Some("construction"), 1.0);
+                crate::ui_kit::icons::paint_accented(ui.painter(), well.shrink(t.space_6), "status_recovery", Some("construction"), 1.0);
             }
             let text_at = pos2(rect.left() + icon_width, rect.top() + (top_height - galley.size().y) / 2.0);
             ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).galley(text_at, galley, t.form_ink);
@@ -516,7 +558,7 @@ fn recovery_panel(
                 ui,
                 &format!("{id}:recover"),
                 recover_rect,
-                egui::RichText::new(recover).font(crate::fonts::semibold(t.font_heading)),
+                egui::RichText::new(recover).font(crate::ui_kit::type_face::semibold(t.font_heading)),
                 super::actions::Button::Primary,
             );
             let b = discard.map(|label| {
@@ -545,7 +587,7 @@ fn grid_geometry(available: f32, min_width: f32, count: usize) -> (usize, f32) {
 fn sample_height(ui: &Ui, width: f32, sample: &SampleCard<'_>) -> f32 {
     let t = Tokens::get();
     let inner_width = (dimension(width) - t.space_10 * 2.0).max(0.0);
-    let title = ui.painter().layout(sample.title.to_owned(), crate::fonts::semibold(t.font_button), t.form_ink, inner_width);
+    let title = ui.painter().layout(sample.title.to_owned(), crate::ui_kit::type_face::semibold(t.font_button), t.form_ink, inner_width);
     let description = ui.painter().layout(sample.description.to_owned(), FontId::proportional(t.font_body), t.file_dim, inner_width);
     t.file_sample_image_height + t.space_10 * 2.0 + t.space_8 * 2.0 + title.size().y + description.size().y
 }
@@ -553,7 +595,7 @@ fn sample_height(ui: &Ui, width: f32, sample: &SampleCard<'_>) -> f32 {
 fn sample_card_with_height(ui: &mut Ui, id: &str, width: f32, sample: &SampleCard<'_>, min_height: f32) -> Response {
     let t = Tokens::get();
     let inner_width = (dimension(width).min(dimension(ui.available_width())) - t.space_10 * 2.0).max(0.0);
-    let title = ui.painter().layout(sample.title.to_owned(), crate::fonts::semibold(t.font_button), t.form_ink, inner_width);
+    let title = ui.painter().layout(sample.title.to_owned(), crate::ui_kit::type_face::semibold(t.font_button), t.form_ink, inner_width);
     let description = ui.painter().layout(sample.description.to_owned(), FontId::proportional(t.font_body), t.file_dim, inner_width);
     let height = sample_height(ui, width, sample).max(min_height);
     let (rect, response) = allocate(ui, id, width, height, sample.title);
@@ -562,13 +604,7 @@ fn sample_card_with_height(ui: &mut Ui, id: &str, width: f32, sample: &SampleCar
     let image = Rect::from_min_size(inner.min, vec2(inner.width(), t.file_sample_image_height));
     thumbnail(ui, image, sample.thumbnail);
     if sample.thumbnail.is_none() {
-        crate::icons::paint_accented(
-            ui.painter(),
-            Rect::from_center_size(image.center(), Vec2::splat(t.file_tile_icon.min(image.width()))),
-            sample.icon,
-            None,
-            1.0,
-        );
+        sample.icon.paint(ui.painter(), Rect::from_center_size(image.center(), Vec2::splat(t.file_tile_icon.min(image.width()))), 1.0);
     }
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(inner));
     let title_top = image.bottom() + t.space_8;

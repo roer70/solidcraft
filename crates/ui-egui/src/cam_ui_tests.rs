@@ -1745,8 +1745,8 @@ fn the_manufacture_folder_menu_and_preferences_set_the_display() {
     let colours = folder_menu_items(&h.app).into_iter().find(|i| i.label == "Toolpath colour").unwrap();
     let checked: Vec<&str> = colours.children.iter().filter(|c| c.shortcut == "current").map(|c| c.label.as_str()).collect();
     assert_eq!(checked, ["white"]);
-    h.app.prefs_window.open = true;
-    h.app.prefs_window.section = crate::prefs::PAGE_GRAPHICS;
+    h.app.prefs_window.shell.open = true;
+    h.app.prefs_window.shell.section = crate::prefs::PAGE_GRAPHICS;
     h.frames(3);
     for row in ["Toolpath colour", "Toolpath width", "Simulation detail", "Rapid rate"] {
         assert!(h.widget(row).is_some(), "{row} in the Preferences");

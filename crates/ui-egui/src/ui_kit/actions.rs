@@ -1,7 +1,7 @@
 //! Actions elements for dense cards; see `docs/ui-kit.md` for tokens and usage.
 use super::metrics::*;
-use crate::fonts::RichTextExt as _;
 use crate::ui_kit::BackingTooltipExt as _;
+use crate::ui_kit::type_face::RichTextExt as _;
 use egui::{Response, RichText, Ui, vec2};
 use solidcraft_theme::Tokens;
 
@@ -158,7 +158,7 @@ fn icon_button_presentation(
     if response.hovered() {
         ui.painter().rect_filled(rect, t.control_radius, t.hover);
     }
-    let paint = if mirrored { crate::icons::paint_ink_mirrored } else { crate::icons::paint_ink };
+    let paint = if mirrored { crate::ui_kit::icons::paint_ink_mirrored } else { crate::ui_kit::icons::paint_ink };
     paint(
         ui.painter(),
         if quiet { egui::Rect::from_center_size(rect.center(), vec2(t.space_12, t.space_12)) } else { rect.shrink(t.form_icon_inset) },
@@ -404,7 +404,8 @@ impl<'a> HeaderActions<'a> {
             if label.is_empty() {
                 continue;
             }
-            let text = ui.painter().layout_no_wrap(solidcraft_ui_text::tr_label(label).to_owned(), crate::fonts::bold(t.font_label), t.form_ink);
+            let text =
+                ui.painter().layout_no_wrap(solidcraft_ui_text::tr_label(label).to_owned(), crate::ui_kit::type_face::bold(t.font_label), t.form_ink);
             let width = (text.size().x.ceil() + t.space_8 * 2.0).min((x - band.left()).max(0.0));
             let rect = egui::Rect::from_min_max(
                 egui::pos2(x - width, band.center().y - t.form_button_height / 2.0),
@@ -487,7 +488,7 @@ pub(crate) fn button_pair(ui: &mut egui::Ui, key: &str, states: [bool; 2], butto
                 let left = rect.center().x - (galley.size().x + icon_width) / 2.0;
                 let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
                 if let Some(icon) = button.icon {
-                    crate::icons::paint_icon(
+                    crate::ui_kit::icons::paint_icon(
                         &painter,
                         egui::Rect::from_center_size(
                             egui::pos2(left + t.sketch_footer_icon_size / 2.0, rect.center().y),
@@ -683,9 +684,9 @@ pub(crate) fn compact_button(ui: &mut Ui, glyph: &str, tooltip: &str, enabled: b
             if arrow {
                 let icon = rect.shrink(t.form_icon_inset);
                 if glyph == MOVE_UP {
-                    crate::icons::paint_ink_flipped(ui.painter(), icon, "chevron", ink);
+                    crate::ui_kit::icons::paint_ink_flipped(ui.painter(), icon, "chevron", ink);
                 } else {
-                    crate::icons::paint_ink(ui.painter(), icon, "chevron", ink);
+                    crate::ui_kit::icons::paint_ink(ui.painter(), icon, "chevron", ink);
                 }
             } else {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(t.font_label), ink);
@@ -715,7 +716,7 @@ pub(crate) fn icon_action(ui: &mut Ui, label: &str, icon: &str, enabled: bool, d
 /// Compact stage actions share the icon-label button's frame, typography and hit target.
 pub(crate) fn icon_label_width(ui: &Ui, label: &str, icon: Option<&str>, primary: bool) -> f32 {
     let t = Tokens::get();
-    let font = if primary { crate::fonts::semibold(t.font_button) } else { egui::FontId::proportional(t.font_label) };
+    let font = if primary { crate::ui_kit::type_face::semibold(t.font_button) } else { egui::FontId::proportional(t.font_label) };
     ui.painter().layout_no_wrap(label.into(), font, t.form_ink).size().x.ceil()
         + 2.0
             * if primary {
@@ -743,7 +744,7 @@ pub(crate) fn selection_actions(ui: &mut Ui, name: &str, actions: &[super::Stage
     ui.spacing_mut().interact_size.y = t.control_height - t.space_2;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = t.space_2;
-        let font = crate::fonts::semibold(t.font_small);
+        let font = crate::ui_kit::type_face::semibold(t.font_small);
         let width = ui.painter().layout_no_wrap(name.into(), font.clone(), accent.ink).size().x.min(t.form_label_width) + t.space_12;
         let (rect, name_response) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_2), egui::Sense::click());
         name_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
@@ -805,7 +806,7 @@ fn icon_label_presentation(ui: &mut Ui, label: &str, icon: Option<&str>, enabled
                 t.space_12
             };
         if let Some(icon) = icon {
-            crate::icons::paint_ink(
+            crate::ui_kit::icons::paint_ink(
                 ui.painter(),
                 egui::Rect::from_center_size(egui::pos2(left + t.space_14 / 2.0, rect.center().y), vec2(t.space_14, t.space_14)),
                 icon,
@@ -817,7 +818,7 @@ fn icon_label_presentation(ui: &mut Ui, label: &str, icon: Option<&str>, enabled
             ui,
             egui::Rect::from_min_max(egui::pos2(left, rect.top()), rect.max),
             label,
-            if primary { crate::fonts::semibold(t.font_button) } else { egui::FontId::proportional(t.font_label) },
+            if primary { crate::ui_kit::type_face::semibold(t.font_button) } else { egui::FontId::proportional(t.font_label) },
             ink,
             false,
         );

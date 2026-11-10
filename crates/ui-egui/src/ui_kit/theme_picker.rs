@@ -305,7 +305,13 @@ pub(crate) fn theme_slot(ui: &mut Ui, slot: &ThemeSlot<'_>) -> Response {
     glyph(ui.painter(), icon, if slot.night { ThemeGlyph::Moon } else { ThemeGlyph::Sun }, t.form_dim);
     let p = ui.painter().with_clip_rect(r.shrink(t.space_8).intersect(ui.clip_rect()));
     p.text(pos2(icon.right() + t.space_4, icon.center().y), Align2::LEFT_CENTER, slot.title, FontId::proportional(t.font_small), t.form_dim);
-    p.text(pos2(x, r.bottom() - t.space_16 - t.space_4), Align2::LEFT_CENTER, slot.name, crate::fonts::semibold(t.font_label), t.form_ink);
+    p.text(
+        pos2(x, r.bottom() - t.space_16 - t.space_4),
+        Align2::LEFT_CENTER,
+        slot.name,
+        crate::ui_kit::type_face::semibold(t.font_label),
+        t.form_ink,
+    );
     p.text(pos2(r.right() - t.space_10, r.center().y), Align2::RIGHT_CENTER, slot.hint, FontId::proportional(t.font_small), t.form_dim);
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), slot.aimed, slot.title));
     super::settings_search::remember(ui, slot.title, r);
@@ -372,7 +378,7 @@ pub(crate) fn theme_card(ui: &mut Ui, card: &ThemeCard<'_>, width: f32) -> Respo
     if let Some(help) = card.options {
         let centre = pos2(r.right() - t.space_8 - size / 2.0, r.top() + t.space_4 + (width - t.space_8) * 76.0 / 124.0 - size / 2.0);
         ui.painter().circle_filled(centre, size / 2.0, t.form_primary);
-        crate::icons::paint_ink(ui.painter(), Rect::from_center_size(centre, vec2(t.space_12, t.space_12)), "settings", t.on_accent);
+        crate::ui_kit::icons::paint_ink(ui.painter(), Rect::from_center_size(centre, vec2(t.space_12, t.space_12)), "settings", t.on_accent);
         return response.backing_on_hover_text(help);
     }
     response
@@ -404,8 +410,23 @@ pub(crate) fn theme_empty(ui: &mut Ui, message: &str, clear: &str, reset: impl F
     });
 }
 
-/// A clipped row with overlaid fades, or five equal columns with vertical scrolling.
-pub(crate) fn theme_browser(ui: &mut Ui, id: &str, count: usize, grid: bool, reveal: Option<usize>, mut item: impl FnMut(&mut Ui, usize, f32)) {
+/// The host's names for the browser's paging arrows.
+pub(crate) struct PageLabels<'a> {
+    pub previous: &'a str,
+    pub next: &'a str,
+}
+
+/// A clipped row with overlaid fades and paging arrows named by `arrows`, or five equal columns
+/// with vertical scrolling.
+pub(crate) fn theme_browser(
+    ui: &mut Ui,
+    id: &str,
+    count: usize,
+    grid: bool,
+    reveal: Option<usize>,
+    arrows: &PageLabels<'_>,
+    mut item: impl FnMut(&mut Ui, usize, f32),
+) {
     let t = Tokens::get();
     let fill = super::preferences::settings_card_frame(ui).fill;
     browser_frame(ui, |ui| {
@@ -530,7 +551,7 @@ pub(crate) fn theme_browser(ui: &mut Ui, id: &str, count: usize, grid: bool, rev
             if response.has_focus() {
                 ui.painter().circle_stroke(centre, size / 2.0 + t.space_2, Stroke::new(t.space_2, t.form_primary));
             }
-            let label = solidcraft_ui_text::tr(if left { "prefs.appearance.previous_themes" } else { "prefs.appearance.next_themes" });
+            let label = if left { arrows.previous } else { arrows.next };
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
             solidcraft_ui_registry::publish_target(if left { "prefs:theme_previous" } else { "prefs:theme_next" }, arrow);
             if response.clicked() {

@@ -11,8 +11,9 @@
 //! state; [`items`] lists them and [`run_item`] runs one, so the control channel (`ui.menu`,
 //! `ui.menuPick`) and tests reach everything a click does.
 
-use crate::ui_kit::{BackingTooltipExt as _, Container, Item, LIST_W, Surface};
-use egui::{Color32, Pos2, Rect, Sense, Vec2, pos2, vec2};
+use crate::ui_kit::menu::{list_row_lit, menu_frame};
+use crate::ui_kit::{BackingTooltipExt as _, Container, Item, LIST_W, MenuItem, Surface};
+use egui::{Pos2, Rect, Sense, Vec2, pos2, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
 use solidcraft_engine::geom::prelude::*;
@@ -337,7 +338,20 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
             act(if app.session.visibility.hidden_bodies.contains(name) { "ui.show" } else { "ui.hide" }, "Show/Hide", "eye")
                 .with(json!({"bodies":[name]})),
         ],
-        Target::Body { name } => body_items(app, std::slice::from_ref(name), true),
+        Target::Body { name } => {
+            let mut v = body_items(app, std::slice::from_ref(name), true);
+            // A selected browser body hands every selected body to the mesh dialogs (#12334).
+            // A row outside the selection still opens them with only the body right-clicked.
+            let selected = sel_bodies(app);
+            if selected.len() > 1 && selected.contains(name) {
+                for item in &mut v {
+                    if item.id == "ui.saveMesh" || item.id == "ui.sendToSlicer" {
+                        item.params = Some(json!({ "bodies": selected }));
+                    }
+                }
+            }
+            v
+        }
         Target::Sketch { id } => sketch_items(app, *id),
         Target::Feature { id } => feature_items(app, *id),
         Target::Plane { id } => plane_items(app, *id),
@@ -420,13 +434,13 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
                 .collect();
             if items.is_empty() { vec![act("ui.editSketch", app.tr("ui.edit_sketch_empty"), "sketch").on(false)] } else { items }
         }
-        Target::VisualStyle => crate::navigation_bar::VISUAL_STYLES
+        Target::VisualStyle => crate::navigation_slots::VISUAL_STYLES
             .iter()
             .enumerate()
             .map(|(index, (style, label))| {
                 let current = usize::from(app.ui.visual_style) == index;
                 let mut item = cmd(app, "view.visual_style", label).with(json!({"style": style})).key(if current { "current" } else { "" });
-                item.icon = crate::navigation_bar::visual_style_icon(u8::try_from(index).unwrap_or_default()).into();
+                item.icon = crate::navigation_slots::visual_style_icon(u8::try_from(index).unwrap_or_default()).into();
                 item
             })
             .collect(),
@@ -649,20 +663,26 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
             v.push(cmd(app, "view.normal_to", "Normal to Selection").with(json!({"camera": app.cam})));
             v.push(Item::sep());
         }
-        v.push(cmd(app, "sketch.create", "Create Sketch"));
-        v.push(cmd(app, "solid.extrude", "Extrude"));
-        v.push(cmd(app, "construct.plane.offset", "Offset Plane"));
+        let planar =
+            sel.iter().any(|s| matches!(s, Sel::Face { body, index, .. } if crate::dialogs::planar_face(&app.session, body, *index).is_some()));
+        let one_flat = planar && matches!(sel.as_slice(), [Sel::Face { .. }]);
+        // A curved face, or several faces, have no one plane to sketch on, offset or extrude from;
+        // Press Pull offsets them.
+        if one_flat {
+            v.push(cmd(app, "sketch.create", "Create Sketch"));
+            v.push(cmd(app, "solid.extrude", "Extrude"));
+            v.push(cmd(app, "construct.plane.offset", "Offset Plane"));
+        } else {
+            v.push(cmd(app, "solid.press_pull", "Press Pull"));
+        }
         v.push(cmd(app, "solid.shell", "Shell"));
         if crate::joint_handles::selected_occurrence(app).is_some() {
             v.push(cmd(app, "occurrence.move", "Move"));
         }
         v.push(act("ui.editFeature", "Edit Feature", "edit").with(json!({ "feature": feature })).on(feature.is_some()));
         v.push(act("ui.editSketch", "Edit Profile Sketch", "sketch").with(json!({ "sketch": sketch })).on(sketch.is_some()));
-        let planar =
-            sel.iter().any(|s| matches!(s, Sel::Face { body, index, .. } if crate::dialogs::planar_face(&app.session, body, *index).is_some()));
         v.push(act("ui.lookAt", "Look At", "lookat").on(planar));
         let marked = matches!(sel.as_slice(), [Sel::Face { body, index, .. }] if crate::print_face_ui::is_print_face(app, body, *index));
-        let one_flat = planar && matches!(sel.as_slice(), [Sel::Face { .. }]);
         v.push(cmd(app, "body.print_face", if marked { "Clear Print Face" } else { "Print Face" }).on(one_flat));
         v.push(Item::sep());
         v.push(act("ui.appearance", "Appearance", "appearance").key("A"));
@@ -675,8 +695,12 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         v.push(act("ui.findBrowser", "Find in Browser", "list").with(json!({ "body": face })));
         v.push(act("ui.findTimeline", "Find in Timeline", "rollback").with(json!({ "feature": feature, "body": face })).on(feature.is_some()));
         v.push(Item::sep());
-        v.push(cmd(app, "solid.press_pull", "Press Pull"));
+        if one_flat {
+            v.push(cmd(app, "solid.press_pull", "Press Pull"));
+        }
         v.push(cmd(app, "inspect.measure", "Measure"));
+        // What cannot act on these faces is left out.
+        v.retain(|i| i.enabled || i.is_sep());
     } else if has(|s| matches!(s, Sel::Edge { .. })) {
         let body = sel.iter().find_map(|s| if let Sel::Edge { body, .. } = s { Some(body.clone()) } else { None }).unwrap_or_default();
         let hidden = app.session.visibility.hidden_bodies.contains(&body);
@@ -986,7 +1010,11 @@ fn occurrence_items(app: &SolveApp, path: &[u64]) -> Vec<Item> {
             item.params = Some(json!({"path": path}));
         }
         "ui.export" | "ui.saveMesh" | "ui.sendToSlicer" => item.params = Some(json!({"bodies": bodies})),
-        "browser.expand_all" | "browser.collapse_all" => item.params = Some(json!({"path": path})),
+        // Expand Below and Collapse Below fold this placement's branch; Collapse All keeps the
+        // whole tree.
+        "browser.expand_all" | "browser.collapse_all" if item.params.as_ref().is_some_and(|p| p.get("component").is_some()) => {
+            item.params = Some(json!({"path": path}))
+        }
         _ => {}
     });
     entries
@@ -1159,8 +1187,16 @@ fn component_items(app: &SolveApp, id: u64) -> Vec<Item> {
         );
     }
     organize.push(Item::sep());
-    organize.push(cmd(app, "browser.expand_all", "Expand All").with(json!({ "component": id })));
-    organize.push(cmd(app, "browser.collapse_all", "Collapse All").with(json!({ "component": id })));
+    if id == 0 {
+        organize.push(cmd(app, "browser.expand_all", "Expand All").with(json!({ "component": id })));
+        organize.push(cmd(app, "browser.collapse_all", "Collapse All").with(json!({ "component": id })));
+    } else {
+        // A component folds its own branch; Collapse All still rolls up the whole tree, every
+        // placement at every level, as it does from the design row (#11866).
+        organize.push(cmd(app, "browser.expand_all", "Expand Below").with(json!({ "component": id })));
+        organize.push(cmd(app, "browser.collapse_all", "Collapse Below").with(json!({ "component": id })));
+        organize.push(cmd(app, "browser.collapse_all", "Collapse All").with(json!({})));
+    }
     v.push(group("Organize", "folder", organize));
     v
 }
@@ -1627,15 +1663,11 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
             let (Some(path), name) = (p.get("path").and_then(Value::as_str), p.get("name").and_then(Value::as_str).unwrap_or_default()) else {
                 return;
             };
-            // The design is open here, so its file's place is already the user's choice.
-            let hosts: Vec<String> = solidcraft_engine::io::vfs::network_host(path).into_iter().collect();
-            let inserted = solidcraft_engine::io::vfs::allowing_hosts(&hosts, || app.run("component.insert_design", json!({ "path": path })));
-            if inserted.is_ok() {
-                app.fit_view();
-                if p.get("unsaved").and_then(Value::as_bool) == Some(true) {
-                    app.set_status(solidcraft_ui_text::format("ui.insert_design.saved_file", &[("name", name)]), false);
-                }
-            }
+            // The design is open here, so its file's place is already the user's choice. Its saved
+            // file is read beside the window, as a picked one is (#11593).
+            let note = (p.get("unsaved").and_then(Value::as_bool) == Some(true))
+                .then(|| solidcraft_ui_text::format("ui.insert_design.saved_file", &[("name", name)]));
+            app.insert_design_async(path, note);
         }
         "ui.insertBrowse" => app.pick_design_to_insert(),
         "ui.export" => {
@@ -2636,7 +2668,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             if target == Target::Workspace {
-                picked = crate::ui_kit::workspace_menu(ui, &list, key_row, (screen.bottom() - list_at.y).max(160.0)).or(picked.take());
+                picked = workspace_menu(ui, &list, key_row, (screen.bottom() - list_at.y).max(160.0)).or(picked.take());
             } else {
                 menu_frame(ui, |ui| seen.push(level_rows(ui, &list, 0, key_row, path.first().copied(), leaving == Some(0), &mut picked)));
             }
@@ -2706,38 +2738,6 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
 }
 
-/// Shared kit surface; legacy callers retain their menu positioning and dispatch.
-pub fn menu_frame<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    crate::ui_kit::Menu::show(ui, LIST_W, add)
-}
-
-pub fn button(ui: &mut egui::Ui, label: &str, icon: &str) -> egui::Response {
-    button_enabled(ui, label, icon, true)
-}
-
-pub fn button_enabled(ui: &mut egui::Ui, label: &str, icon: &str, enabled: bool) -> egui::Response {
-    let mut item = crate::ui_kit::MenuItem::new(label, label, icon);
-    item.enabled = enabled;
-    item.show(ui)
-}
-
-pub fn list_row(ui: &mut egui::Ui, item: &Item) -> Option<Item> {
-    list_row_lit(ui, item, false)
-}
-
-pub fn list_row_lit(ui: &mut egui::Ui, item: &Item, lit: bool) -> Option<Item> {
-    if item.is_sep() {
-        crate::ui_kit::Menu::separator(ui);
-        return None;
-    }
-    if item.is_heading() {
-        crate::ui_kit::Menu::heading(ui, &item.label);
-        return None;
-    }
-    let row = kit_item(item, lit);
-    (row.show(ui).clicked() && item.enabled).then(|| item.clone())
-}
-
 /// The rows of each open level: the menu itself, then every open flyout in turn. It stops at a
 /// row that is gone or has no flyout.
 fn open_levels<'a>(list: &'a [Item], path: &[usize]) -> Vec<&'a [Item]> {
@@ -2787,7 +2787,7 @@ fn level_rows(
         }
         // Flyout entries may share an id (swatches): their handles add the label.
         let handle = format!("{}:{}", item.id, item.label);
-        let mut kit = kit_item(item, cursor == Some(k) || (open == Some(k) && !leaving));
+        let mut kit = MenuItem::from_item(item, cursor == Some(k) || (open == Some(k) && !leaving));
         if depth > 0 {
             kit.id = &handle;
         }
@@ -2813,21 +2813,6 @@ fn level_rows(
         }
     }
     seen
-}
-
-fn kit_item(item: &Item, lit: bool) -> crate::ui_kit::MenuItem<'_> {
-    crate::ui_kit::MenuItem {
-        id: &item.id,
-        label: &item.label,
-        icon: &item.icon,
-        shortcut: if item.shortcut == "current" { "" } else { &item.shortcut },
-        enabled: item.enabled,
-        highlighted: lit,
-        danger: item.icon == "delete",
-        checked: (item.shortcut == "current").then_some(true),
-        swatch: item.swatch.map(|c| Color32::from_rgb(c[0], c[1], c[2])),
-        submenu: !item.children.is_empty(),
-    }
 }
 
 fn show_rename(app: &mut SolveApp, ctx: &egui::Context) {
@@ -2870,6 +2855,40 @@ pub fn finish_rename(app: &mut SolveApp, text: Option<&str>, commit: bool) -> bo
         let _ = commit_rename(app, &r);
     }
     true
+}
+
+/// How the workspace menu shows each of SolidCraft's workspaces ([`Target::Workspace`]).
+fn workspace_style(item: &Item) -> Option<crate::ui_kit::WorkspaceStyle> {
+    use crate::ui_kit::WorkspaceStyle;
+    use solidcraft_theme::AccentRamp;
+    let planned = |slug, description| WorkspaceStyle { slug, description, tabs: None, ramp: None };
+    Some(match item.label.as_str() {
+        "Design" => {
+            WorkspaceStyle { slug: "design", description: "ui.workspace_design_description", tabs: Some("ui.workspace_design_tabs"), ramp: None }
+        }
+        "Render" => WorkspaceStyle {
+            slug: "render",
+            description: "ui.workspace_render_description",
+            tabs: Some("ui.workspace_render_tabs"),
+            ramp: Some(AccentRamp::Render),
+        },
+        "Animation" => planned("animation", "ui.workspace_animation_description"),
+        "Simulation" => planned("simulation", "ui.workspace_simulation_description"),
+        "Manufacture" => WorkspaceStyle {
+            slug: "manufacture",
+            description: "ui.workspace_manufacture_cam_description",
+            tabs: Some("ui.workspace_manufacture_tabs"),
+            ramp: None,
+        },
+        "Drawing" => planned("drawing", "ui.workspace_drawing_description"),
+        _ => return None,
+    })
+}
+
+/// The kit's workspace menu over SolidCraft's workspaces (`items` of [`Target::Workspace`]).
+pub(crate) fn workspace_menu(ui: &mut egui::Ui, items: &[Item], key_row: Option<usize>, height: f32) -> Option<Item> {
+    let menu = crate::ui_kit::WorkspaceMenu { items, style: &workspace_style, footer: solidcraft_ui_text::tr("ui.workspace_footer") };
+    crate::ui_kit::workspace_menu(ui, &menu, key_row, height)
 }
 
 #[cfg(test)]
@@ -3354,7 +3373,7 @@ mod tests {
         h.frames(90);
         assert!(h.app.cam.back().dist(flat.plane_normal.unwrap()) < 2e-6);
         h.app.session.selection = vec![Sel::Face { body: body.name.clone(), index: curved.index, point: curved.centroid }];
-        assert!(items(&h.app, &Target::Viewport).iter().any(|i| i.id == "view.normal_to" && !i.enabled));
+        assert!(!items(&h.app, &Target::Viewport).iter().any(|i| i.id == "view.normal_to"));
     }
 
     #[test]
@@ -3463,7 +3482,7 @@ mod workspace_menu_tests {
         let app = SolveApp::new(Default::default(), Default::default());
         let list = items(&app, &Target::Workspace);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            crate::ui_kit::workspace_menu(ui, &list, None, 1000.0);
+            workspace_menu(ui, &list, None, 1000.0);
         });
         output.textures_delta.clear();
         let titles: Vec<_> = output
@@ -3475,7 +3494,7 @@ mod workspace_menu_tests {
             })
             .collect();
         assert_eq!(titles.len(), 1, "workspace titles must never be drawn twice");
-        assert_eq!(titles[0].galley.job.sections[0].format.font_id, crate::fonts::semibold(14.0));
+        assert_eq!(titles[0].galley.job.sections[0].format.font_id, crate::ui_kit::type_face::semibold(14.0));
     }
 
     #[test]

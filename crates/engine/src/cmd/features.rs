@@ -12,21 +12,26 @@ use solidcraft_geom::prelude::*;
 
 use super::{CommandSpec, not_in_sketch};
 use crate::params::{UNKNOWN_COMMAND, bad, bool_, expr, expr_problem, req_expr, str_, string_list, string_list_or_default, vec2, vec3};
+use crate::schema::features::SweepParams;
 use crate::schema::features::{
     AppliedRadius, BoundingSolidParams, BoxParams, ChamferParams, CombineParams, CombineResult, ConeParams, CylinderParams, ExtrudeParams,
-    FeatureNotice, FeatureResult, FilletParams, FilletResult, NoticeAction, OffsetPlaneParams, PipeParams, PlaneAtAngleParams, ScaleParams,
-    SphereParams, TorusParams,
+    FeatureNotice, FeatureResult, FilletParams, FilletResult, NoticeAction, OffsetPlaneParams, PipeParams, PlaneAtAngleParams, PressPullParams,
+    PressPullResult, RevolveParams, ScaleParams, SphereParams, TorusParams,
 };
+use crate::schema::features::{PatternCircularParams, PatternCircularResult};
+use crate::schema::split::{SplitBodyParams, SplitFaceParams};
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
 const BOX_CONTRACT: TypedContract<BoxParams> = TypedContract::new();
 const EXTRUDE_CONTRACT: TypedContract<ExtrudeParams> = TypedContract::new();
+const REVOLVE_CONTRACT: TypedContract<RevolveParams> = TypedContract::new();
 const CYLINDER_CONTRACT: TypedContract<CylinderParams> = TypedContract::new();
 const SPHERE_CONTRACT: TypedContract<SphereParams> = TypedContract::new();
 const TORUS_CONTRACT: TypedContract<TorusParams> = TypedContract::new();
 const CONE_CONTRACT: TypedContract<ConeParams> = TypedContract::new();
 const PIPE_CONTRACT: TypedContract<PipeParams> = TypedContract::new();
+const SWEEP_CONTRACT: TypedContract<SweepParams> = TypedContract::new();
 const BOUNDING_SOLID_CONTRACT: TypedContract<BoundingSolidParams> = TypedContract::new();
 const SCALE_CONTRACT: TypedContract<ScaleParams> = TypedContract::new();
 const COMBINE_CONTRACT: TypedContract<CombineParams> = TypedContract::new();
@@ -34,6 +39,10 @@ const OFFSET_PLANE_CONTRACT: TypedContract<OffsetPlaneParams> = TypedContract::n
 const PLANE_AT_ANGLE_CONTRACT: TypedContract<PlaneAtAngleParams> = TypedContract::new();
 const FILLET_CONTRACT: TypedContract<FilletParams> = TypedContract::new();
 const CHAMFER_CONTRACT: TypedContract<ChamferParams> = TypedContract::new();
+const SPLIT_FACE_CONTRACT: TypedContract<SplitFaceParams> = TypedContract::new();
+const SPLIT_BODY_CONTRACT: TypedContract<SplitBodyParams> = TypedContract::new();
+const PATTERN_CIRCULAR_CONTRACT: TypedContract<PatternCircularParams> = TypedContract::new();
+const PRESS_PULL_CONTRACT: TypedContract<PressPullParams> = TypedContract::new();
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.extrude", "Extrude", crate::checked!("solid.extrude", extrude))
@@ -43,13 +52,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&EXTRUDE_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params("distance: expr (or through_all: true); taper?: angle expr (positive: outward, so the far end is larger along the extrusion direction; negative: inward, so the far end is smaller); corner?: preserve_curvature|tangent|round (how a taper closes a sharp corner its offset opens: each wall continues as itself, a line's plane or an arc's cone, until it meets its neighbour; each continues straight along its end tangent; or an arc about the corner. Without it, each profile preserves curvature where every curve is a line or an arc and takes tangent where another curve has a corner, and the feature's warning says so; a corner rule given is kept, and refused where the kernel cannot build it); sketch?: id|name (default: active or last sketch); profiles?: all | [index] | [{curves: [ids]}] (the profile whose outer loop is made of exactly these curves, or pieces of them; found again on every recompute, so it follows parameter changes; islands inside are its holes; an error when no profile or several match) | [{point:[x,y]}] (index and point picks are stored by their curves when that finds the same profile; a pick on a drawn profile that reference geometry, such as the projected outline of the face the sketch is on, cuts into regions takes the whole drawn profile); exact_regions?: bool (each index or point pick is exactly the region it names, as the dialogs send); default: every drawn profile, except that a loop inside another is its hole and a loop inside that hole is material again; face?: [x,y,z] (extrude a planar body face instead of a sketch profile); faces?: [[x,y,z],…] (coplanar faces of one body); face_body?: name (whose face, where faces of several bodies meet at the point); direction?: positive|negative|symmetric (distance is total thickness, split evenly around the start plane); convention?: total_distance|legacy_per_side (how a symmetric distance is read; default total_distance, split evenly around the start plane; legacy_per_side: the distance on each side, as older symmetric extrudes keep); distance2?: expr (Two Sides: a second distance on the side direction leaves free, the first side may be through_all or to; with direction: negative the first side goes against the normal and distance2 along it; a negative distance only turns its own side over); start_offset?: expr (along the sketch normal, also with direction: negative); to?: [x,y,z] (To Object: a face, vertex or point; to_offset?: expr past it); from?: [x,y,z] (From Object: start at that face or point); operation?: new|join|cut|intersect|auto (cut into a body, otherwise join existing solids; new in an empty component); touching?: separate|one_body (what a join makes of pieces that share no face: separate, the default, makes each piece that touches another only along an edge or at a point a body of its own and keeps pieces that touch nothing in one body; one_body keeps every piece in one body); targets?: [body] (Join from a face, or from a sketch on a body's face, defaults to that face's body; explicit targets or participants override); name?; body_name?; thin?: true (Thin: a wall along sketch curves instead of the profiles) with curves?: [curve ids] (open chains and closed loops, joined where they meet end to end; default: every drawn curve of the sketch), thickness: expr, side?: center|inside|outside|two_sides (a closed loop's inside is the area it encloses, an open chain's the side it bends toward, a straight line's the left of its first curve as drawn; default center), thickness2?: expr (two_sides: the thickness outside); corners are mitred, crossing walls are one"),
-    CommandSpec::new("solid.revolve", "Revolve", revolve)
+    CommandSpec::new("solid.revolve", "Revolve", crate::checked!("solid.revolve", revolve))
         .at("SOLID", "CREATE")
         .icon("revolve")
-        .params("axis: sketch line id | x | y (sketch axes) | X|Y|Z (world) | {type: world, axis: X|Y|Z} (as returned by timeline.inspect) | construction axis name (followed when edited) | {origin, dir} (origin: numbers or length expressions, followed when parameters change) | {edge|face: [x,y,z]} (a straight or circular edge, or a cylinder, cone or torus face: about its axis, followed as the model changes); angle?: expr (default 360 deg); angle2?: expr (Two Sides: the other side's angle); direction?: symmetric (angle split either side, independent of axis direction); convention?: sketch_normal|legacy_axis_start (default sketch_normal; legacy retains older angular starts); to?: [x,y,z] (To Object: turn until that face, vertex or point); sketch?, profiles? | face: [x,y,z] (a planar body face as the profile) and face_body?: name (whose face, where faces of several bodies meet), operation?, touching?, targets?, name?, body_name?"),
-    CommandSpec::new("solid.sweep", "Sweep", sweep)
+        .contract(&REVOLVE_CONTRACT)
+        .output(output_schema_for::<FeatureResult>)
+        .params("axis: sketch line id | x | y (sketch axes) | X|Y|Z (world) | {type: world, axis: X|Y|Z} (as returned by timeline.inspect) | {sketch, curve} (a line of another sketch, followed in that sketch) | construction axis name (followed when edited) | {origin, dir} (origin: numbers or length expressions, followed when parameters change) | {edge|face: [x,y,z]} (a straight or circular edge, or a cylinder, cone or torus face: about its axis, followed as the model changes); angle?: expr (default 360 deg); angle2?: expr (Two Sides: the other side's angle); direction?: symmetric (angle split either side, independent of axis direction); convention?: sketch_normal|legacy_axis_start (default sketch_normal; legacy retains older angular starts); to?: [x,y,z] (To Object: turn until that face, vertex or point); sketch?, profiles? | face: [x,y,z] (a planar body face as the profile) and face_body?: name (whose face, where faces of several bodies meet), operation?, touching?, targets?, name?, body_name?"),
+    CommandSpec::new("solid.sweep", "Sweep", crate::checked!("solid.sweep", sweep))
         .at("SOLID", "CREATE")
         .icon("sweep")
+        .contract(&SWEEP_CONTRACT)
+        .output(output_schema_for::<FeatureResult>)
         .params("sketch: profile sketch; profiles?; path_sketch: sketch; path: [curve ids in order]; orientation?: perpendicular (default: square to the path, turning with it) | parallel (as drawn: the profile moves without turning; the path must keep crossing its plane) | [x,y,z] (square to the path, its turn about the path fixed by this direction); twist?: angle expr (the profile turns this much about the path over its length; within 4 turns); scale?: expr (the profile's scale at the end, linear along the path; 0.01…100); rails?: [{sketch?: sketch (default path_sketch), curves: [curve ids in order]}] (guide rails, one or two, each meeting every plane square to the path once along it, from the end nearest the path's start: one rail turns the profile so its point where the rail starts stays on the rail and scales it with the rail's distance from the path; two rails carry it between them, its points where they start staying on both; rails take the default orientation, no twist and no scale, and a path without sharp corners); rail_fit?: scale (default: the profile grows and shrinks evenly) | stretch (only across to the rail, between the rails); operation?, touching?, targets?, name?, body_name?"),
     CommandSpec::new("solid.loft", "Loft", loft).at("SOLID", "CREATE").icon("loft").params("sections: [{sketch, profiles?} | {sketch, point: id} (an apex)] (2…50, in order; matching hole counts, no holes at an apex); rails?: [{sketch, curves: [ids in order]}] (one or two guide rails from the first section to the last, through every section's outline: the loft follows them between the sections; not with sections that have holes); rail_fit?: scale|stretch (default scale: with one rail the sections grow evenly with the rail's distance from their middle, with two with the distance between the rails; stretch: only that way); operation?, touching?, targets? (Join excludes hidden bodies from automatic targets; explicit targets or participants may include them), name?, body_name?"),
     CommandSpec::new("solid.box", "Box", crate::checked!("solid.box", prim_box))
@@ -105,9 +118,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("pattern_rect")
         .params("features: [names] | bodies: [names] | components: [names]; dir1: [x,y,z]; count1; spacing1; dir2?, count2?, spacing2?; alignment?, alignment2?: left|center|right (default right; counts include the original); reversed?, reversed2?: bool (Flip)"),
-    CommandSpec::new("solid.pattern.circular", "Circular Pattern", pattern_circ)
+    CommandSpec::new("solid.pattern.circular", "Circular Pattern", crate::checked!("solid.pattern.circular", pattern_circ))
         .at("SOLID", "CREATE")
         .icon("pattern_circ")
+        .contract(&PATTERN_CIRCULAR_CONTRACT)
+        .output(output_schema_for::<PatternCircularResult>)
         .params("features: [names] | bodies: [names] | components: [names]; axis: X|Y|Z | construction axis name (followed when edited) | {origin, dir} (origin coordinates may be length expressions; the pattern follows them) | {edge|face: [x,y,z]} (a straight or circular edge, or a cylinder, cone or torus face: about its axis, followed as the model changes); count; angle? (default 360 deg; partial arcs include both ends); alignment?: left|center|right (default right; original stays fixed); reversed?: bool (Flip; selects the extra side for even centered counts)"),
     CommandSpec::new("solid.pattern.path", "Pattern on Path", pattern_path)
         .at("SOLID", "CREATE")
@@ -169,17 +184,23 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&PLANE_AT_ANGLE_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params("base: XY|XZ|YZ|plane name, or a planar face {face: [x,y,z], body?, index?, path?}; axis: X|Y|Z|construction axis name (where it is now)|{origin, dir} | {edge|face: [x,y,z]} (a straight or circular edge, or a cylinder, cone or torus face: about its axis, followed as the model changes); angle: expr; direction_only?: bool (default false: turn about the axis as a line; true: project the axis direction onto base and turn about the line through pivot, or the base origin); pivot?: point ref (only with direction_only; vertex, sketch point, construction point); name?"),
-    CommandSpec::new("solid.split_face", "Split Face", split_face)
+    CommandSpec::new("solid.split_face", "Split Face", crate::checked!("solid.split_face", split_face))
         .at("SOLID", "MODIFY")
         .icon("split_face")
+        .contract(&SPLIT_FACE_CONTRACT)
+        .output(output_schema_for::<FeatureResult>)
         .params(
             "faces: [[x,y,z] points on the faces to split, or face names from model.faces]; body?; and the splitting tool: plane: XY|XZ|YZ|plane name|{origin, normal} — or tool: {body, point} (a face of a body, its surface extended) — or sketch: id or name (its curves, along the sketch's normal)",
         ),
-    CommandSpec::new("solid.split_body", "Split Body", split_body)
+    CommandSpec::new("solid.split_body", "Split Body", crate::checked!("solid.split_body", split_body))
         .at("SOLID", "MODIFY")
         .icon("split_body")
+        .contract(&SPLIT_BODY_CONTRACT)
+        .output(output_schema_for::<FeatureResult>)
         .params("body: name; plane: XY|XZ|YZ|plane name|{origin, normal} — or tool: {body, point} (a face of a body, its surface extended) — or sketch: id, line: curve id (a straight sketch line, along the sketch's normal)"),
-    CommandSpec::new("solid.press_pull", "Press Pull", press_pull)
+    CommandSpec::new("solid.press_pull", "Press Pull", crate::checked!("solid.press_pull", press_pull))
+        .contract(&PRESS_PULL_CONTRACT)
+        .output(output_schema_for::<PressPullResult>)
         .at("SOLID", "MODIFY")
         .icon("presspull")
         .key("Q")
@@ -892,6 +913,8 @@ fn add_feature_in(s: &mut Session, p: &Value, kind: FeatureKind, world: bool) ->
     serde_json::to_value(reply).map_err(|e| EngineError::Other(e.to_string()))
 }
 
+type FaceProfile = (u64, Option<ProfileSel>, Option<String>);
+
 fn extrude(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.extrude";
     let grouped = if let Some(value) = p.get("faces") {
@@ -903,11 +926,31 @@ fn extrude(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|faces| !faces.is_empty() && faces.len() <= 1024)
             .ok_or_else(|| bad(cmd, "faces must contain between 1 and 1024 points"))?;
         let points = faces.iter().map(|point| vec3(point).ok_or_else(|| bad(cmd, "faces must be points [x,y,z]"))).collect::<Result<Vec<_>>>()?;
+        let groups = super::face::face_groups(s, &points, cmd, str_(p, "face_body"))?;
+        // Faces in different planes extrude each by itself. Every face's profile is taken from
+        // the body as picked, before the first extrusion grows it (#11492).
+        if groups.len() > 1 {
+            let mut profiles = Vec::new();
+            for group in &groups {
+                let (id, points, body) = super::face::sketch_of_faces(s, group, cmd, str_(p, "face_body"))?;
+                profiles.push((id, Some(ProfileSel::Points { points }), Some(body)));
+            }
+            let mut reply = Value::Null;
+            for profile in profiles {
+                reply = extrude_from(s, p, Some(profile))?;
+            }
+            return Ok(reply);
+        }
         let (id, points, body) = super::face::sketch_of_faces(s, &points, cmd, str_(p, "face_body"))?;
         Some((id, Some(ProfileSel::Points { points }), Some(body)))
     } else {
         None
     };
+    extrude_from(s, p, grouped)
+}
+
+fn extrude_from(s: &mut Session, p: &Value, grouped: Option<FaceProfile>) -> Result<Value> {
+    let cmd = "solid.extrude";
     // A planar body face extrudes like a profile: its boundary is copied into a sketch on it.
     let (sketch, face_profile, face_body) = if let Some(grouped) = grouped {
         grouped
@@ -1350,7 +1393,8 @@ fn revolve(s: &mut Session, p: &Value) -> Result<Value> {
 /// A revolve axis of `sketch` from its parameter: a sketch line id, the sketch's x or y axis, a
 /// world axis (also as saved: {type: world, axis: X|Y|Z}), a construction axis by name
 /// (followed when it is edited), {origin, dir} (each origin coordinate a number or an expression over
-/// the parameters, which the axis follows), or an edge
+/// the parameters, which the axis follows), {sketch, curve} (a line of another sketch, followed in
+/// that sketch, #6548; also as saved: {type: sketch_line, …}), or an edge
 /// or round face of the model ({edge|face: [x,y,z]}), which the revolve follows as the model
 /// changes. A line of the sketch wins over a construction axis of the same name.
 pub(super) fn axis_param(s: &Session, sketch: u64, p: &Value, cmd: &str) -> Result<AxisRef> {
@@ -1363,6 +1407,11 @@ pub(super) fn axis_param(s: &Session, sketch: u64, p: &Value, cmd: &str) -> Resu
                 str_(o, "axis").filter(|a| matches!(*a, "X" | "Y" | "Z")).ok_or_else(|| bad(cmd, "world axis requires `axis` to be X, Y or Z"))?;
             return Ok(AxisRef::World { axis: axis.into() });
         }
+        if let Some(curve) = str_(o, "curve") {
+            // A line of a named sketch: kept qualified so it follows that sketch, not the profile's (#6548).
+            let owner = o.get("sketch").map(|v| sketch_id(s, Some(v), cmd, "axis.sketch")).transpose()?;
+            return Ok(AxisRef::SketchLine { curve: curve.into(), sketch: owner });
+        }
         let origin = point_param(s, o, "origin", cmd)?.unwrap_or_else(|| solidcraft_doc::point_expr(Vec3::ZERO));
         let dir = match o.get("dir") {
             None => return Err(bad(cmd, "axis needs `dir`")),
@@ -1374,7 +1423,7 @@ pub(super) fn axis_param(s: &Session, sketch: u64, p: &Value, cmd: &str) -> Resu
         Some(a @ ("X" | "Y" | "Z")) => Ok(AxisRef::World { axis: a.into() }),
         Some(a @ ("x" | "y")) => Ok(AxisRef::SketchAxis { axis: a.into() }),
         Some(name) if !is_sketch_line(s, sketch, name) && is_construction_axis(s, name) => Ok(AxisRef::Construction { name: name.into() }),
-        Some(id) => Ok(AxisRef::SketchLine { curve: id.into() }),
+        Some(id) => Ok(AxisRef::SketchLine { curve: id.into(), sketch: None }),
         None => {
             Err(bad(cmd, "`axis` must be a sketch line id, x, y (sketch axes), X, Y, Z, a construction axis, {origin, dir} or {edge|face: [x,y,z]}"))
         }
@@ -2536,7 +2585,12 @@ fn finish_pattern(
     let mats = solidcraft_doc::pattern_matrices(&s.doc, &s.model.state(), &pattern)?;
     let mut made = Vec::new();
     for c in &comps {
-        let id = s.doc.find_component(c).filter(|id| *id != 0).ok_or_else(|| bad(cmd, format!("no component `{c}`")))?;
+        let id = s
+            .doc
+            .resolve_component(c)
+            .map_err(|error| bad(cmd, error.to_string()))?
+            .filter(|id| *id != 0)
+            .ok_or_else(|| bad(cmd, format!("no component `{c}`")))?;
         let src = s.doc.occurrence_of(id).cloned().ok_or_else(|| bad(cmd, format!("component `{c}` has no occurrence")))?;
         for m in &mats {
             made.push(s.doc_mut().add_occurrence(id, src.parent, solidcraft_doc::mat_mul(m, &src.transform))?);
@@ -2863,14 +2917,14 @@ fn plane_angle(s: &mut Session, p: &Value) -> Result<Value> {
 fn split_face(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.split_face";
     let faces = face_points(s, p, cmd)?;
-    let body = str_(p, "body").map(str::to_string);
+    let picked = faces_body(s, p, &faces);
     let xy = || solidcraft_doc::PlaneRef::Origin { name: "XY".into() };
     let kind = if let Some(t) = p.get("tool").filter(|t| !t.is_null()) {
         let tb = t.get("body").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`tool.body` must name a body"))?.to_string();
         let point = t.get("point").and_then(crate::params::vec3).ok_or_else(|| bad(cmd, "`tool.point` must be [x, y, z] on the tool face"))?;
         FeatureKind::SplitFace {
             faces: faces.into_iter().map(FacePick).collect(),
-            body: body.map(BodyName),
+            body: picked.body.clone().map(BodyName),
             plane: xy(),
             tool: Some(solidcraft_doc::FaceAt { body: BodyName(tb), point: Position(point) }),
             sketch: None,
@@ -2879,16 +2933,22 @@ fn split_face(s: &mut Session, p: &Value) -> Result<Value> {
         let sketch = sketch_id(s, p.get("sketch"), cmd, "sketch")?;
         FeatureKind::SplitFace {
             faces: faces.into_iter().map(FacePick).collect(),
-            body: body.map(BodyName),
+            body: picked.body.clone().map(BodyName),
             plane: xy(),
             tool: None,
             sketch: Some(SketchId(sketch)),
         }
     } else {
         let plane = plane_param(s, p.get("plane"), cmd)?;
-        FeatureKind::SplitFace { faces: faces.into_iter().map(FacePick).collect(), body: body.map(BodyName), plane, tool: None, sketch: None }
+        FeatureKind::SplitFace {
+            faces: faces.into_iter().map(FacePick).collect(),
+            body: picked.body.clone().map(BodyName),
+            plane,
+            tool: None,
+            sketch: None,
+        }
     };
-    add_feature(s, p, kind)
+    add_face_feature(&picked, s, p, kind)
 }
 
 fn split_body(s: &mut Session, p: &Value) -> Result<Value> {
@@ -3460,6 +3520,18 @@ fn face_points(s: &Session, p: &Value, cmd: &str) -> Result<Vec<Vec3>> {
     a.iter().map(|v| super::face::face_ref(s, v, str_(p, "body"), cmd)).collect()
 }
 
+/// The body the `faces` picks of `p` apply to: see [`super::face::faces_body`].
+fn faces_body(s: &Session, p: &Value, faces: &[Vec3]) -> super::face::FacesBody {
+    let refs = p.get("faces").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    super::face::faces_body(s, p, refs, faces)
+}
+
+/// [`add_feature`] for a feature on picked faces: its result warns when a pick was shared by
+/// bodies touching flush ([`super::face::FacesBody::warn`]).
+pub(super) fn add_face_feature(picked: &super::face::FacesBody, s: &mut Session, p: &Value, kind: FeatureKind) -> Result<Value> {
+    add_feature(s, p, kind).map(|out| picked.warn(out))
+}
+
 fn shell(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.shell";
     // No face opened: a closed hollow body, its void sealed inside.
@@ -3467,19 +3539,21 @@ fn shell(s: &mut Session, p: &Value) -> Result<Value> {
         Some(a) if a.is_empty() => Vec::new(),
         _ => face_points(s, p, cmd)?,
     };
+    let picked = faces_body(s, p, &faces);
     let thickness = req_expr(cmd, p, "thickness")?;
     check_expr(s, &thickness, Kind::Length, cmd, "thickness")?;
     let direction = str_(p, "direction").map(str::to_ascii_lowercase).unwrap_or_default();
     if !matches!(direction.as_str(), "" | "inside" | "outside" | "both") {
         return Err(bad(cmd, "`direction` must be inside, outside or both"));
     }
-    add_feature(
+    add_face_feature(
+        &picked,
         s,
         p,
         FeatureKind::Shell {
             faces: faces.into_iter().map(FacePick).collect(),
             thickness,
-            body: str_(p, "body").map(BodyName::from),
+            body: picked.body.clone().map(BodyName),
             direction: if direction == "inside" { String::new() } else { direction },
             tangent_chain: bool_(p, "tangent_chain").unwrap_or(false),
         },
@@ -3489,13 +3563,15 @@ fn shell(s: &mut Session, p: &Value) -> Result<Value> {
 fn draft(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.draft";
     let faces = face_points(s, p, cmd)?;
+    let picked = faces_body(s, p, &faces);
     let angle = req_expr(cmd, p, "angle")?;
     check_expr(s, &angle, Kind::Angle, cmd, "angle")?;
     let neutral = plane_param(s, p.get("neutral"), cmd)?;
     let (vals, _) = s.doc.param_values();
     let pl = s.doc.resolve_plane_in(&vals, &neutral, 0, Some(&s.model.state()))?;
     let pull = p.get("pull").and_then(vec3).unwrap_or_else(|| pl.normal());
-    add_feature(
+    add_face_feature(
+        &picked,
         s,
         p,
         FeatureKind::Draft {
@@ -3503,7 +3579,7 @@ fn draft(s: &mut Session, p: &Value) -> Result<Value> {
             angle,
             neutral,
             pull: Dir(pull),
-            body: str_(p, "body").map(BodyName::from),
+            body: picked.body.clone().map(BodyName),
         },
     )
 }
@@ -3561,17 +3637,7 @@ fn sweep(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn sweep_options(s: &Session, p: &Value, cmd: &str) -> Result<(SweepOrientation, Option<Expr>, Option<Expr>)> {
     let orientation = match p.get("orientation") {
         None | Some(Value::Null) => SweepOrientation::Perpendicular,
-        Some(Value::String(o)) if o.eq_ignore_ascii_case("perpendicular") => SweepOrientation::Perpendicular,
-        Some(Value::String(o)) if o.eq_ignore_ascii_case("parallel") => SweepOrientation::Parallel,
-        Some(v) => {
-            let d = vec3(v)
-                .or_else(|| v.get("direction").and_then(vec3))
-                .ok_or_else(|| bad(cmd, "`orientation` must be perpendicular, parallel or a direction [x, y, z]"))?;
-            if !(d.len() > 1e-9) {
-                return Err(bad(cmd, "the `orientation` direction must not be zero"));
-            }
-            SweepOrientation::Direction(Dir(d))
-        }
+        Some(v) => sweep_orientation(v).map_err(|e| bad(cmd, e))?,
     };
     let twist = match p.get("twist") {
         None | Some(Value::Null) => None,
@@ -3599,6 +3665,24 @@ pub(super) fn sweep_options(s: &Session, p: &Value, cmd: &str) -> Result<(SweepO
     Ok((orientation, twist, scale))
 }
 
+/// A sweep's `orientation` as given (not `null`): perpendicular or parallel (any case), or a
+/// non-zero direction `[x, y, z]`, `{x, y, z}` or `{direction: …}`. The error is the message.
+pub(crate) fn sweep_orientation(v: &Value) -> std::result::Result<SweepOrientation, &'static str> {
+    match v {
+        Value::String(o) if o.eq_ignore_ascii_case("perpendicular") => Ok(SweepOrientation::Perpendicular),
+        Value::String(o) if o.eq_ignore_ascii_case("parallel") => Ok(SweepOrientation::Parallel),
+        v => {
+            let d = vec3(v)
+                .or_else(|| v.get("direction").and_then(vec3))
+                .ok_or("`orientation` must be perpendicular, parallel or a direction [x, y, z]")?;
+            if !(d.len() > 1e-9) {
+                return Err("the `orientation` direction must not be zero");
+            }
+            Ok(SweepOrientation::Direction(Dir(d)))
+        }
+    }
+}
+
 /// A sweep's guide `rails` and `rail_fit` (solid.sweep and surface.sweep), checked: one or two
 /// rails, each a sketch (default: the path's) and 1…1000 of its curves; a fit of scale or
 /// stretch; and no orientation, twist or scale besides, since the rails set those.
@@ -3619,9 +3703,7 @@ pub(super) fn sweep_rails(s: &Session, p: &Value, cmd: &str, path_sketch: u64) -
 pub(super) fn guide_rails(s: &Session, p: &Value, cmd: &str, what: &str, default_sketch: Option<u64>) -> Result<(Vec<SweepRail>, RailFit)> {
     let rail_fit = match p.get("rail_fit") {
         None | Some(Value::Null) => RailFit::Scale,
-        Some(Value::String(f)) if f.eq_ignore_ascii_case("scale") => RailFit::Scale,
-        Some(Value::String(f)) if f.eq_ignore_ascii_case("stretch") => RailFit::Stretch,
-        Some(_) => return Err(bad(cmd, "`rail_fit` must be scale or stretch")),
+        Some(v) => rail_fit_form(v).map_err(|e| bad(cmd, e))?,
     };
     let given = match p.get("rails") {
         None | Some(Value::Null) => return Ok((Vec::new(), rail_fit)),
@@ -3645,6 +3727,16 @@ pub(super) fn guide_rails(s: &Session, p: &Value, cmd: &str, what: &str, default
         rails.push(SweepRail { sketch: SketchId(sketch), curves });
     }
     Ok((rails, rail_fit))
+}
+
+/// Guide rails' `rail_fit` as given (not `null`): scale or stretch, in any case. The error is
+/// the message.
+pub(crate) fn rail_fit_form(v: &Value) -> std::result::Result<RailFit, &'static str> {
+    match v {
+        Value::String(f) if f.eq_ignore_ascii_case("scale") => Ok(RailFit::Scale),
+        Value::String(f) if f.eq_ignore_ascii_case("stretch") => Ok(RailFit::Stretch),
+        _ => Err("`rail_fit` must be scale or stretch"),
+    }
 }
 
 fn loft(s: &mut Session, p: &Value) -> Result<Value> {
@@ -3884,19 +3976,27 @@ fn scale(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn delete_face(s: &mut Session, p: &Value) -> Result<Value> {
     let faces = face_points(s, p, "face.delete")?;
+    let picked = faces_body(s, p, &faces);
     let heal = bool_(p, "heal").unwrap_or(true);
-    add_feature(s, p, FeatureKind::DeleteFace { faces: faces.into_iter().map(FacePick).collect(), body: str_(p, "body").map(BodyName::from), heal })
+    add_face_feature(
+        &picked,
+        s,
+        p,
+        FeatureKind::DeleteFace { faces: faces.into_iter().map(FacePick).collect(), body: picked.body.clone().map(BodyName), heal },
+    )
 }
 
 fn offset_face(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.offset_face";
     let faces = face_points(s, p, cmd)?;
+    let picked = faces_body(s, p, &faces);
     let distance = req_expr(cmd, p, "distance")?;
     check_expr(s, &distance, Kind::Length, cmd, "distance")?;
-    add_feature(
+    add_face_feature(
+        &picked,
         s,
         p,
-        FeatureKind::OffsetFace { faces: faces.into_iter().map(FacePick).collect(), distance, body: str_(p, "body").map(BodyName::from) },
+        FeatureKind::OffsetFace { faces: faces.into_iter().map(FacePick).collect(), distance, body: picked.body.clone().map(BodyName) },
     )
 }
 
@@ -3916,6 +4016,9 @@ mod prism_local_tests;
 #[path = "loft_rails_tests.rs"]
 mod loft_rails_tests;
 
+#[cfg(test)]
+#[path = "revolve_axis_sketch_tests.rs"]
+mod revolve_axis_sketch_tests;
 #[cfg(test)]
 #[path = "revolve_convention_tests.rs"]
 mod revolve_convention_tests;

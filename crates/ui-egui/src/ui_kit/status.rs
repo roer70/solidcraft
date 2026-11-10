@@ -1,6 +1,6 @@
 //! Status heading and constraint meter; Tokens: font_label, text, text_dim, accent, dialog_rule, sketch_accent, spacing.
-use crate::fonts::RichTextExt as _;
 use crate::ui_kit::BackingTooltipExt as _;
+use crate::ui_kit::type_face::RichTextExt as _;
 use egui::{RichText, vec2};
 use solidcraft_theme::Tokens;
 
@@ -25,7 +25,7 @@ pub(crate) fn status_header(ui: &mut egui::Ui, key: &str, name: &str, status: St
             ui.spacing_mut().interact_size.y = t.form_icon_size;
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(vec2(t.form_icon_size, t.form_icon_size), egui::Sense::hover());
-                crate::icons::paint_icon(ui.painter(), rect, status.icon, f32::from(t.icon.a()) / 255.0);
+                crate::ui_kit::icons::paint_icon(ui.painter(), rect, status.icon, f32::from(t.icon.a()) / 255.0);
                 ui.add(egui::Label::new(RichText::new(name).semibold().size(t.font_label)).truncate()).backing_on_hover_text(name);
             });
             ui.horizontal(|ui| {
@@ -78,7 +78,7 @@ pub(crate) fn steps(ui: &mut egui::Ui, key: &str, labels: &[&str], current: usiz
             ui.allocate_exact_size(vec2(super::metrics::dimension(ui.available_width()), super::row_height()), egui::Sense::hover());
         let order = i.cmp(&current);
         let (font, ink) = match order {
-            std::cmp::Ordering::Equal => (crate::fonts::semibold(t.font_label), t.form_ink),
+            std::cmp::Ordering::Equal => (crate::ui_kit::type_face::semibold(t.font_label), t.form_ink),
             std::cmp::Ordering::Less => (egui::FontId::proportional(t.font_label), t.form_ink),
             std::cmp::Ordering::Greater => (egui::FontId::proportional(t.font_label), t.form_dim),
         };

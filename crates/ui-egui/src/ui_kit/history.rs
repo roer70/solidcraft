@@ -1,6 +1,6 @@
 //! Shared history chips, dense name rows, drop bars and rollback markers.
-use crate::icons;
 use crate::ui_kit::BackingTooltipExt as _;
+use crate::ui_kit::icons;
 use egui::{Painter, Rect, Stroke, pos2, vec2};
 use solidcraft_theme::{TabAccent, Tokens};
 
@@ -13,7 +13,7 @@ pub(crate) struct StripHeading(std::sync::Arc<egui::Galley>);
 impl StripHeading {
     pub fn new(painter: &Painter, title: &str) -> Self {
         let t = Tokens::get();
-        Self(painter.layout_no_wrap(title.to_owned(), crate::fonts::semibold(t.font_heading), t.text))
+        Self(painter.layout_no_wrap(title.to_owned(), crate::ui_kit::type_face::semibold(t.font_heading), t.text))
     }
 
     pub fn width(&self) -> f32 {
@@ -56,7 +56,9 @@ impl HistoryStyle {
 pub(crate) struct HistoryChip<'a> {
     pub icon: &'a str,
     pub name: &'a str,
-    pub kind: &'a str,
+    /// The icon's accent (an icon palette name the host gives each step; `None`: its artwork's
+    /// own colours).
+    pub icon_accent: Option<&'a str>,
     pub selected: bool,
     pub hovered: bool,
     pub dim: bool,
@@ -69,23 +71,6 @@ pub(crate) struct HistoryChip<'a> {
     pub accent: TabAccent,
     /// Draw the icon in this one colour instead of its artwork: a sketch's solve state (#7245).
     pub ink: Option<egui::Color32>,
-}
-
-/// Share the feature classification across chips and name rows. Surface aliases also
-/// cover Patch/Stitch/Thicken and other surface features without a Surface-prefixed kind.
-fn feature_icon_accent(kind: &str, icon: &str) -> Option<&'static str> {
-    let tab = if kind.starts_with("Sketch") {
-        "SKETCH"
-    } else if kind.starts_with("Surface") || icon.starts_with("surface_") || icon == "continuity" {
-        "SURFACE"
-    } else if kind.starts_with("Mesh") {
-        "MESH"
-    } else if kind.starts_with("Form") {
-        "FORM"
-    } else {
-        "MODEL"
-    };
-    solidcraft_theme::icon_accent_for_tab(tab)
 }
 
 impl HistoryChip<'_> {
@@ -139,7 +124,7 @@ impl HistoryChip<'_> {
             Rect::from_center_size(if names { pos2(rect.left() + t.space_8 + side / 2.0, rect.center().y) } else { rect.center() }, vec2(side, side));
         match self.ink {
             Some(ink) => icons::paint_ink(&p, icon, self.icon, ink),
-            None => icons::paint_accented(&p, icon, self.icon, feature_icon_accent(self.kind, self.icon), 1.0),
+            None => icons::paint_accented(&p, icon, self.icon, self.icon_accent, 1.0),
         }
         if names {
             let ink = if self.selected {
@@ -149,7 +134,7 @@ impl HistoryChip<'_> {
             } else {
                 t.text
             };
-            let font = if self.selected { crate::fonts::semibold(t.font_body) } else { egui::FontId::proportional(t.font_body) };
+            let font = if self.selected { crate::ui_kit::type_face::semibold(t.font_body) } else { egui::FontId::proportional(t.font_body) };
             let text_rect = Rect::from_min_max(
                 pos2(icon.right() + t.space_6 + 1.0, rect.top()),
                 pos2(rect.right() - if self.error || self.warning { t.space_16 } else { t.space_8 }, rect.bottom()),
@@ -192,6 +177,13 @@ pub(crate) fn history_marker(p: &Painter, rect: Rect, vertical: bool, accent: Ta
     p.circle(centre, outer_radius - t.space_2 / 2.0, if vertical { t.panel } else { t.timeline }, Stroke::new(t.space_2, accent.color));
 }
 
+/// The host's names for the Play control: playing History, and stopping it while it plays.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayLabels<'a> {
+    pub play: &'a str,
+    pub stop: &'a str,
+}
+
 /// The same controls are used in every History orientation: first, previous, Play History, next
 /// and last, or the four without Play when `history_play_button` is off.
 #[derive(Clone, Copy, PartialEq)]
@@ -222,28 +214,35 @@ impl HistoryTransport {
         }
     }
 
-    pub(crate) fn label(self, playing: bool) -> &'static str {
-        solidcraft_ui_text::tr(match self {
-            Self::First => "ui.history_first",
-            Self::Back => "ui.history_back",
-            Self::Play if playing => "cmd.timeline_stop",
-            Self::Play => "cmd.timeline_play",
-            Self::Forward => "ui.history_forward",
-            Self::Last => "ui.history_last",
-        })
+    pub(crate) fn label(self, playing: bool, play: PlayLabels<'_>) -> &str {
+        match self {
+            Self::First => solidcraft_ui_text::tr("ui.history_first"),
+            Self::Back => solidcraft_ui_text::tr("ui.history_back"),
+            Self::Play if playing => play.stop,
+            Self::Play => play.play,
+            Self::Forward => solidcraft_ui_text::tr("ui.history_forward"),
+            Self::Last => solidcraft_ui_text::tr("ui.history_last"),
+        }
     }
 
-    /// `playing` turns the Play button into Stop; the other controls ignore it.
-    pub fn show(self, ui: &mut egui::Ui, rect: Rect, playing: bool) -> egui::Response {
+    /// `playing` turns the Play button into Stop, named by `play`; the other controls ignore
+    /// both. Published as `history:` and its [`HistoryTransport::id`].
+    pub fn show(self, ui: &mut egui::Ui, rect: Rect, playing: bool, play: PlayLabels<'_>) -> egui::Response {
+        self.show_as(ui, rect, playing, "history:", play)
+    }
+
+    /// [`HistoryTransport::show`], published in the widget registry as `prefix` followed by its
+    /// [`HistoryTransport::id`].
+    pub fn show_as(self, ui: &mut egui::Ui, rect: Rect, playing: bool, prefix: &str, play: PlayLabels<'_>) -> egui::Response {
         let t = Tokens::get();
         let response = ui.interact(rect, ui.scope_id().with(("history_transport", self.id())), egui::Sense::click());
-        solidcraft_ui_registry::publish_target(&format!("history:{}", self.id()), rect);
+        solidcraft_ui_registry::publish_target(&format!("{prefix}{}", self.id()), rect);
         if response.hovered() {
             ui.painter().rect_filled(rect, t.radius_sm, t.hover);
         }
         let glyph = if self == Self::Play && playing { "pause" } else { self.id() };
-        icons::glyphs::transport_glyph(ui.painter(), rect.center(), glyph, t.icon);
-        let label = self.label(playing);
+        crate::ui_kit::icons::glyphs::transport_glyph(ui.painter(), rect.center(), glyph, t.icon);
+        let label = self.label(playing, play);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
         response.on_hover_cursor(egui::CursorIcon::PointingHand).backing_on_hover_text(label)
     }
@@ -393,7 +392,7 @@ pub(crate) fn history_seam(ui: &mut egui::Ui, card: Rect, names: bool) -> Histor
         tip.popup = tip.popup.anchor(seam.pill).align(egui::RectAlign::RIGHT_START).frame(frame);
         crate::ui_kit::Container::show_tooltip(response.id, tip, |ui| {
             let t = Tokens::get();
-            ui.label(egui::RichText::new(label).font(crate::fonts::semibold(t.font_body)).color(t.text));
+            ui.label(egui::RichText::new(label).font(crate::ui_kit::type_face::semibold(t.font_body)).color(t.text));
             ui.label(egui::RichText::new(solidcraft_ui_text::tr("ui.history_edge_hint")).size(t.font_small).color(t.text_dim));
         });
     }
@@ -429,7 +428,7 @@ mod tests {
                 assert_eq!(seam.pill.center(), card.right_center());
                 assert_eq!(seam.edge.width(), 10.0);
                 for state in [HistoryHandleState::Rest, HistoryHandleState::Hover, HistoryHandleState::Drag] {
-                    let ctx = crate::fonts::test_context();
+                    let ctx = crate::ui_kit::test_support::context();
                     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| seam.paint(ui.painter(), card, names, state));
                     out.textures_delta.clear();
                     let t = Tokens::get();
@@ -475,7 +474,7 @@ mod tests {
 
     impl SeamHarness {
         fn new(names: bool) -> Self {
-            let mut h = Self { ctx: crate::fonts::test_context(), names, width: history_width(names), time: 0.0, focused: false };
+            let mut h = Self { ctx: crate::ui_kit::test_support::context(), names, width: history_width(names), time: 0.0, focused: false };
             h.frame(vec![]);
             h.frame(vec![]);
             h
@@ -518,7 +517,7 @@ mod tests {
 
     #[test]
     fn seam_edge_cursor_pill_click_double_click_and_keyboard_toggle() {
-        use crate::test_support::{key, pointer};
+        use crate::ui_kit::test_support::{key, pointer};
         let mut h = SeamHarness::new(false);
         let edge = pos2(h.card().right() - 4.0, h.card().top() + 30.0);
         assert_eq!(h.frame(vec![egui::Event::PointerMoved(edge)]).platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
@@ -553,7 +552,7 @@ mod tests {
 
     #[test]
     fn seam_drag_resizes_continuously_and_snaps_both_directions() {
-        use crate::test_support::pointer;
+        use crate::ui_kit::test_support::pointer;
         for (names, delta, expected) in [(false, 40.0, true), (false, 20.0, false), (true, -40.0, false), (true, -20.0, true)] {
             for pill in [false, true] {
                 let mut h = SeamHarness::new(names);
@@ -579,16 +578,16 @@ mod tests {
         for dark in [false, true] {
             solidcraft_theme::set_dark(dark);
             let t = Tokens::get();
-            let accent = TabAccent::for_tab(&t, "SURFACE");
+            let accent = TabAccent::for_ramp(&t, solidcraft_theme::AccentRamp::Surface);
             for style in [HistoryStyle::Icons, HistoryStyle::Names] {
                 for (selected, error, dim) in [(true, false, false), (false, true, false), (true, false, true)] {
                     let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(158.0, style.height()));
-                    let ctx = crate::fonts::test_context();
+                    let ctx = crate::ui_kit::test_support::context();
                     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                         HistoryChip {
                             icon: "surface_extrude",
                             name: "Offset1",
-                            kind: "SurfaceOffsetFeature",
+                            icon_accent: None,
                             selected,
                             hovered: false,
                             dim,
@@ -640,7 +639,7 @@ mod tests {
             solidcraft_theme::set_dark(dark);
             let t = Tokens::get();
             for style in [HistoryStyle::Bottom, HistoryStyle::Icons, HistoryStyle::Names] {
-                let ctx = crate::fonts::test_context();
+                let ctx = crate::ui_kit::test_support::context();
                 let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                     for index in 0..3 {
                         let rect = Rect::from_min_size(
@@ -650,7 +649,7 @@ mod tests {
                         HistoryChip {
                             icon: "box",
                             name: "Box",
-                            kind: "BoxFeature",
+                            icon_accent: None,
                             selected: index == 0,
                             hovered: false,
                             dim: index == 2,
@@ -658,7 +657,7 @@ mod tests {
                             error: false,
                             warning: false,
                             reference: false,
-                            accent: TabAccent::for_tab(&t, "MODEL"),
+                            accent: TabAccent::for_ramp(&t, solidcraft_theme::AccentRamp::Main),
                             ink: None,
                         }
                         .paint(ui.painter(), rect, style);
@@ -667,7 +666,7 @@ mod tests {
                 out.textures_delta.clear();
                 let mut connections = 0;
                 for clipped in out.shapes {
-                    crate::test_support::each_shape(&clipped.shape, &mut |shape| {
+                    crate::ui_kit::test_support::each_shape(&clipped.shape, &mut |shape| {
                         if matches!(shape, egui::Shape::LineSegment { .. } | egui::Shape::Path(_)) {
                             connections += 1;
                         }
@@ -682,10 +681,10 @@ mod tests {
     #[test]
     fn both_strip_orientations_share_the_drop_bar_and_marker_geometry() {
         let t = Tokens::get();
-        let accent = TabAccent::for_tab(&t, "SURFACE");
+        let accent = TabAccent::for_ramp(&t, solidcraft_theme::AccentRamp::Surface);
         for vertical in [false, true] {
             let rect = Rect::from_min_size(pos2(20.0, 20.0), if vertical { vec2(160.0, 12.0) } else { vec2(12.0, 28.0) });
-            let ctx = crate::fonts::test_context();
+            let ctx = crate::ui_kit::test_support::context();
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| history_drop_bar(ui.painter(), rect, vertical, accent.color));
             out.textures_delta.clear();
             let lines: Vec<_> = out
@@ -701,11 +700,11 @@ mod tests {
         for dark in [false, true] {
             solidcraft_theme::set_dark(dark);
             let t = Tokens::get();
-            let accent = TabAccent::for_tab(&t, "SURFACE");
+            let accent = TabAccent::for_ramp(&t, solidcraft_theme::AccentRamp::Surface);
             // Both vertical widths retain the 12 pt marker row; the bottom strip rotates it.
             for (vertical, size) in [(true, vec2(46.0, 12.0)), (true, vec2(158.0, 12.0)), (false, vec2(12.0, 28.0))] {
                 let rect = Rect::from_min_size(pos2(20.0, 20.0), size);
-                let ctx = crate::fonts::test_context();
+                let ctx = crate::ui_kit::test_support::context();
                 let mut out = ctx.run_ui(egui::RawInput::default(), |ui| history_marker(ui.painter(), rect, vertical, accent));
                 out.textures_delta.clear();
                 let lines: Vec<_> = out

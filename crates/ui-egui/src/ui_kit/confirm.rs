@@ -74,7 +74,7 @@ impl<'a> Confirm<'a> {
         self.window.surface(ctx, true, |ui| self.content(ui, valid, message))
     }
 
-    pub(super) fn content(&self, ui: &mut Ui, valid: bool, message: impl FnOnce(&mut Ui)) -> (bool, Action) {
+    pub(crate) fn content(&self, ui: &mut Ui, valid: bool, message: impl FnOnce(&mut Ui)) -> (bool, Action) {
         super::scope(ui, |ui| {
             let t = Tokens::get();
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -100,9 +100,9 @@ impl<'a> Confirm<'a> {
                         };
                         ui.painter().circle_filled(disc.center(), diameter / 2.0, fill);
                         if matches!(self.tone, Tone::Danger) {
-                            crate::icons::paint_danger(ui.painter(), disc.shrink(t.space_8), self.icon, 1.0);
+                            crate::ui_kit::icons::paint_danger(ui.painter(), disc.shrink(t.space_8), self.icon, 1.0);
                         } else {
-                            crate::icons::paint_accented(ui.painter(), disc.shrink(t.space_8), self.icon, accent, 1.0);
+                            crate::ui_kit::icons::paint_accented(ui.painter(), disc.shrink(t.space_8), self.icon, accent, 1.0);
                         }
                         solidcraft_ui_registry::publish_rect("confirm:disc", disc);
                         ui.vertical(|ui| {
@@ -113,7 +113,7 @@ impl<'a> Confirm<'a> {
                                 vec2(t.form_close_size, t.form_close_size),
                             );
                             let title = egui::Rect::from_min_max(heading.min, egui::pos2(close.left(), heading.bottom()));
-                            paint_text(ui, title, self.title, crate::fonts::semibold(t.font_subtitle), t.form_ink, false);
+                            paint_text(ui, title, self.title, crate::ui_kit::type_face::semibold(t.font_subtitle), t.form_ink, false);
                             ui.interact(title, ui.scope_id().with("title"), egui::Sense::hover())
                                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), self.title));
                             let response = super::icon_button_at(ui, close, "close", "Close");
