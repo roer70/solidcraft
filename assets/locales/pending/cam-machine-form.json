@@ -58,7 +58,9 @@
     "manufacture.limits_help": "How far the axis may turn, lowest and highest in degrees. Both empty: round and round, as a rotary table with no stops.",
     "manufacture.runs_on": "Runs on",
     "manufacture.no_machine": "no machine: three axes",
-    "manufacture.runs_on_help": "The machine of this design the setup runs on: its axes and its default post. A rotary A turns the part for a setup whose tool axis is not Z. No machine: a three-axis mill."
+    "manufacture.runs_on_help": "The machine of this design the setup runs on: its axes and its default post. A rotary A turns the part for a setup whose tool axis is not Z. No machine: a three-axis mill.",
+    "manufacture.try_at": "Try at",
+    "manufacture.try_at_help": "Moves or turns this axis in the picture above, to see which way it goes: mm along a linear axis, degrees about a rotary one. Nothing is sent to the machine."
   },
   "de": {
     "manufacture.new_machine": "Neue Maschine",
@@ -119,7 +121,9 @@
     "manufacture.limits_help": "Wie weit die Achse drehen darf, tiefster und höchster Wert in Grad. Beide leer: endlos, wie ein Rundtisch ohne Anschläge.",
     "manufacture.runs_on": "Läuft auf",
     "manufacture.no_machine": "keine Maschine: drei Achsen",
-    "manufacture.runs_on_help": "Die Maschine dieses Entwurfs, auf der die Aufspannung läuft: ihre Achsen und ihr Standard-Postprozessor. Eine Drehachse A dreht das Teil für eine Aufspannung, deren Werkzeugachse nicht Z ist. Keine Maschine: eine Dreiachsfräse."
+    "manufacture.runs_on_help": "Die Maschine dieses Entwurfs, auf der die Aufspannung läuft: ihre Achsen und ihr Standard-Postprozessor. Eine Drehachse A dreht das Teil für eine Aufspannung, deren Werkzeugachse nicht Z ist. Keine Maschine: eine Dreiachsfräse.",
+    "manufacture.try_at": "Probieren bei",
+    "manufacture.try_at_help": "Bewegt oder dreht diese Achse im Bild oben, um zu sehen, in welche Richtung sie geht: mm entlang einer Linearachse, Grad um eine Drehachse. An die Maschine wird nichts gesendet."
   },
   "ja": {
     "manufacture.new_machine": "新しい機械",
@@ -180,7 +184,9 @@
     "manufacture.limits_help": "軸が回転できる範囲(最小と最大、度)。両方空: ストッパーのない回転テーブルのように無限に回ります。",
     "manufacture.runs_on": "使用する機械",
     "manufacture.no_machine": "機械なし: 3 軸",
-    "manufacture.runs_on_help": "このセットアップを実行する、この設計の機械です。その軸と既定のポストを使います。工具軸が Z でないセットアップでは、回転軸 A が部品を回します。機械なし: 3 軸フライス盤。"
+    "manufacture.runs_on_help": "このセットアップを実行する、この設計の機械です。その軸と既定のポストを使います。工具軸が Z でないセットアップでは、回転軸 A が部品を回します。機械なし: 3 軸フライス盤。",
+    "manufacture.try_at": "試す位置",
+    "manufacture.try_at_help": "上の図でこの軸を動かしたり回したりして、どちらへ動くかを確かめます。直線軸は mm、回転軸は度です。機械には何も送られません。"
   },
   "zh": {
     "manufacture.new_machine": "新机床",
@@ -241,7 +247,9 @@
     "manufacture.limits_help": "轴可旋转的范围，最低与最高（度）。两者均为空：无限旋转，如同无限位的转台。",
     "manufacture.runs_on": "运行机床",
     "manufacture.no_machine": "无机床：三轴",
-    "manufacture.runs_on_help": "此设置运行所用的本设计机床：其轴和默认后处理器。工具轴不是 Z 的设置由旋转轴 A 转动零件。无机床：三轴铣床。"
+    "manufacture.runs_on_help": "此设置运行所用的本设计机床：其轴和默认后处理器。工具轴不是 Z 的设置由旋转轴 A 转动零件。无机床：三轴铣床。",
+    "manufacture.try_at": "试移到",
+    "manufacture.try_at_help": "在上方的图中移动或转动此轴，查看它的方向：直线轴为 mm，旋转轴为度。不会向机床发送任何内容。"
   },
   "sv": {
     "manufacture.new_machine": "Ny maskin",
@@ -302,6 +310,8 @@
     "manufacture.limits_help": "Hur långt axeln får vrida, lägst och högst i grader. Båda tomma: varv på varv, som ett vridbord utan stopp.",
     "manufacture.runs_on": "Körs på",
     "manufacture.no_machine": "ingen maskin: tre axlar",
-    "manufacture.runs_on_help": "Den av designens maskiner som uppspänningen körs på: dess axlar och standardpost. En roterande A vrider detaljen för en uppspänning vars verktygsaxel inte är Z. Ingen maskin: en treaxlig fräs."
+    "manufacture.runs_on_help": "Den av designens maskiner som uppspänningen körs på: dess axlar och standardpost. En roterande A vrider detaljen för en uppspänning vars verktygsaxel inte är Z. Ingen maskin: en treaxlig fräs.",
+    "manufacture.try_at": "Prova vid",
+    "manufacture.try_at_help": "Flyttar eller vrider axeln i bilden ovanför, så du ser åt vilket håll den går: mm längs en linjär axel, grader runt en roterande. Inget skickas till maskinen."
   }
 }

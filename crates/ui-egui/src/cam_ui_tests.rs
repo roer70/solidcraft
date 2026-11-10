@@ -2557,6 +2557,37 @@ fn a_setup_form_picks_the_machine_it_runs_on() {
     h.app.run("cam.machine.remove", json!({"machine": "FlexiHAL"})).unwrap();
 }
 
+/// FlexiHAL's form pictures its machine: A through the block, and A at −90 brings the block's
+/// back (+Y) up, as A turns about −X.
+#[test]
+fn a_machine_forms_drawing_turns_the_stock_with_a() {
+    use super::machine_view::Part;
+    let mut f = flexihal_form();
+    let stock =
+        |f: &MachineForm| -> Vec<Vec3> { machine_drawing(f).lines.into_iter().filter(|l| l.2 == Part::Stock).flat_map(|(a, b, _)| [a, b]).collect() };
+    let near = |points: &[Vec3], p: Vec3| points.iter().any(|q| q.dist(p) < 1e-9);
+    let level = stock(&f);
+    assert!(near(&level, Vec3::new(30.0, 20.0, 15.0)), "a block about the origin, A through it");
+    f.axes[0].at = Some(-90.0);
+    let turned = stock(&f);
+    let top = turned.iter().map(|p| p.z).fold(f64::MIN, f64::max);
+    assert!((top - 20.0).abs() < 1e-9, "the block's back is its top now: {top}");
+    assert!(
+        near(&turned, Vec3::new(30.0, -15.0, 20.0)) && near(&turned, Vec3::new(-30.0, -15.0, 20.0)),
+        "the back (Y 20) up, the top (Z 15) to the front"
+    );
+
+    // The picture has the four axes, A's ring and the tool; a row not typed far enough is left out.
+    let d = machine_drawing(&f);
+    let labels: Vec<&str> = d.labels.iter().map(|l| l.1).collect();
+    assert_eq!(labels, ["X", "Y", "Z", "A"]);
+    assert!(d.lines.iter().filter(|l| l.2 == Part::Rotary).count() > 48, "A's line and ring");
+    assert!(d.lines.iter().any(|l| l.2 == Part::Tool));
+    f.axes[1].max.clear();
+    assert_eq!(machine_drawing(&f).labels.len(), 3);
+    assert_eq!(f.axes[1].sketched(), None);
+}
+
 /// What a machine form still needs: a name, an axis's travel, a typed direction, both limits.
 #[test]
 fn a_machine_form_says_what_it_still_needs() {

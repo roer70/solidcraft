@@ -194,6 +194,9 @@ pub struct AxisRow {
     pub pivot: [String; 3],
     /// Its limits in degrees; both empty: it turns round and round.
     pub limits: [String; 2],
+    /// Where the form's picture has it, mm or degrees (`None`: the middle of its travel, or 0°).
+    /// Only shown; nothing is sent to a machine.
+    pub at: Option<f64>,
 }
 
 /// The names a linear axis can have.
@@ -226,6 +229,7 @@ impl AxisRow {
             head: false,
             pivot: ["0".into(), "0".into(), "0".into()],
             limits: Default::default(),
+            at: None,
         }
     }
 
@@ -233,6 +237,47 @@ impl AxisRow {
     pub fn label(&self) -> &'static str {
         let names = if self.rotary { &ROTARY_AXES } else { &LINEAR_AXES };
         names.get(self.name).copied().unwrap_or(names[0])
+    }
+
+    /// The axis as far as it is typed, for the form's picture: `None` while its numbers
+    /// do not make an axis yet. An empty pivot box is 0.
+    pub fn sketched(&self) -> Option<solidcraft_engine::doc::manufacture::MachineAxis> {
+        use solidcraft_engine::doc::manufacture::{AxisName, Carrier, MachineAxis};
+        let num = |s: &str| s.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+        let name = match self.label() {
+            "X" => AxisName::X,
+            "Y" => AxisName::Y,
+            "Z" => AxisName::Z,
+            "A" => AxisName::A,
+            "B" => AxisName::B,
+            _ => AxisName::C,
+        };
+        if !self.rotary {
+            let (min, max) = (num(&self.min)?, num(&self.max)?);
+            return (min < max).then_some(MachineAxis::Linear { name, min, max });
+        }
+        let d = match TURN_DIRECTIONS.get(self.about) {
+            Some((_, d)) if self.about + 1 < TURN_DIRECTIONS.len() => *d,
+            _ => [num(&self.direction[0])?, num(&self.direction[1])?, num(&self.direction[2])?],
+        };
+        let axis = Vec3::new(d[0], d[1], d[2]);
+        let pivot = self.pivot.each_ref().map(|p| if p.trim().is_empty() { Some(0.0) } else { num(p) });
+        let [Some(px), Some(py), Some(pz)] = pivot else { return None };
+        let on = if self.head { Carrier::Head } else { Carrier::Table };
+        let limits = match self.limits.each_ref().map(|l| num(l)) {
+            [Some(low), Some(high)] if low < high => Some([low, high]),
+            _ => None,
+        };
+        (axis.len() > 1e-9).then_some(MachineAxis::Rotary { name, axis, on, pivot: Vec3::new(px, py, pz), limits })
+    }
+
+    /// The range its slider spans: its travel, its limits, or a turn either way.
+    fn slider_range(&self) -> Option<(f64, f64)> {
+        use solidcraft_engine::doc::manufacture::MachineAxis;
+        match self.sketched()? {
+            MachineAxis::Linear { min, max, .. } => Some((min, max)),
+            MachineAxis::Rotary { limits, .. } => Some(limits.map_or((-180.0, 180.0), |[low, high]| (low, high))),
+        }
     }
 }
 
@@ -269,6 +314,7 @@ impl MachineForm {
                         head: *on == Carrier::Head,
                         pivot: [pivot.x, pivot.y, pivot.z].map(num),
                         limits: limits.map_or_else(Default::default, |l| l.map(num)),
+                        at: None,
                     }
                 }
             })
@@ -3058,6 +3104,24 @@ fn refresh(app: &mut SolveApp) {
     app.manufacture.path_ids = ids;
 }
 
+/// The picture of the machine an open machine form describes, as far as it is typed, posed as
+/// its sliders are.
+pub fn machine_drawing(f: &MachineForm) -> machine_view::Drawing {
+    use solidcraft_engine::doc::manufacture::MachineAxis;
+    let (axes, at): (Vec<MachineAxis>, Vec<Option<f64>>) = f.axes.iter().filter_map(|row| Some((row.sketched()?, row.at))).unzip();
+    // A slider not moved yet: the middle of the travel, or 0 degrees.
+    let at: Vec<f64> = axes
+        .iter()
+        .zip(at)
+        .map(|(axis, at)| match (axis, at) {
+            (_, Some(at)) => at,
+            (MachineAxis::Linear { min, max, .. }, None) => (min + max) * 0.5,
+            (MachineAxis::Rotary { .. }, None) => 0.0,
+        })
+        .collect();
+    machine_view::drawing(&axes, &at)
+}
+
 /// The toolpaths to draw.
 pub fn paths(app: &mut SolveApp) -> &[Path] {
     refresh(app);
@@ -3262,6 +3326,48 @@ pub fn draw(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
             let fade = (1.0 - (now - when) / FLASH_SECONDS) as f32;
             painter.circle(p, 14.0, t.error.gamma_multiply(0.35 * fade), Stroke::new(2.0, t.error.gamma_multiply(fade)));
         }
+    }
+}
+
+/// The picture of a machine form's machine, `height` high and as wide as the form, seen from
+/// the front right and above as the viewport's home view is: X to the right and down, Y to the
+/// right and up, Z up. Each part in a colour of its own.
+fn machine_picture(ui: &mut egui::Ui, d: &machine_view::Drawing, height: f32) {
+    use machine_view::Part;
+    let t = Tokens::get();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, f32::from(t.radius_sm), t.text_dim.gamma_multiply(0.08));
+    let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+    let flat = |p: Vec3| ((p.x + p.y) * c, p.z + (p.y - p.x) * s);
+    // Fitted to the room, the same scale both ways.
+    let points = d.lines.iter().flat_map(|(a, b, _)| [*a, *b]).chain(d.labels.iter().map(|l| l.0)).map(flat);
+    let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+    for (x, y) in points {
+        (lo, hi) = ((lo.0.min(x), lo.1.min(y)), (hi.0.max(x), hi.1.max(y)));
+    }
+    if lo.0 > hi.0 {
+        return;
+    }
+    let room = rect.shrink(t.space_12);
+    let scale = (f64::from(room.width()) / (hi.0 - lo.0).max(1.0)).min(f64::from(room.height()) / (hi.1 - lo.1).max(1.0));
+    let mid = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
+    let screen = |p: Vec3| {
+        let (x, y) = flat(p);
+        room.center() + egui::vec2(((x - mid.0) * scale) as f32, (-(y - mid.1) * scale) as f32)
+    };
+    let style = |part: Part| match part {
+        Part::Linear => (2.0, t.accent),
+        Part::Rotary => (2.0, t.sketch_accent),
+        Part::Stock => (1.5, t.text),
+        Part::Tool => (2.5, t.warning),
+    };
+    for (a, b, part) in &d.lines {
+        let (width, colour) = style(*part);
+        painter.line_segment([screen(*a), screen(*b)], Stroke::new(width, colour));
+    }
+    for (at, label, part) in &d.labels {
+        painter.text(screen(*at), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(t.font_body), style(*part).1);
     }
 }
 
@@ -3495,6 +3601,9 @@ fn help(label: &str) -> Option<&'static str> {
         "Peck depth" => "Drill this deep, pull back to clear the chips, and go on. Empty: in one go.",
         "Dwell" => "Seconds to wait at the bottom of each hole.",
         "Machine" => "A new machine, or one of this design's to change. Setups name the machine they run on.",
+        "Try at" => {
+            "Moves or turns this axis in the picture above, to see which way it goes: mm along a linear axis, degrees about a rotary one. Nothing is sent to the machine."
+        }
         "Runs on" => {
             "The machine of this design the setup runs on: its axes and its default post. A rotary A turns the part for a setup whose tool axis is not Z. No machine: a three-axis mill."
         }
@@ -4016,6 +4125,10 @@ fn form_ui(ui: &mut egui::Ui, form: &mut Form, selected: &[(String, Vec3)], choi
     if let Form::Tool(f) = form {
         tool_assistant(ui, f, need, &choices.materials, &choices.holders);
         return;
+    }
+    // A machine form's machine, as a picture above its rows.
+    if let Form::Machine(f) = form {
+        machine_picture(ui, &machine_drawing(f), 220.0);
     }
     // An operation form's heights, as a picture left of their rows' labels.
     let mut picture: Option<Picture> = None;
@@ -4580,6 +4693,17 @@ fn machine_grid(ui: &mut egui::Ui, f: &mut MachineForm, choices: &Choices, need:
                 let mut travel = [std::mem::take(&mut a.min), std::mem::take(&mut a.max)];
                 boxes(ui, ("travel", k), &mut travel, &["from", "to"], true, "Travel");
                 [a.min, a.max] = travel;
+            });
+        }
+        // Where the picture above has it, once it is typed far enough to draw.
+        if let Some((low, high)) = a.slider_range() {
+            labelled(ui, "Try at", |ui| {
+                let mut v = a.at.unwrap_or(if a.rotary { 0.0 } else { (low + high) * 0.5 }).clamp(low, high);
+                let r = ui_kit::slider(ui, &mut v, low..=high, ui_kit::Slider { format: |v| format!("{v:.0}"), ..Default::default() });
+                if r.changed() {
+                    a.at = Some(v);
+                }
+                explained(r, "Try at", None);
             });
         }
         if let Some((_, e)) = f.row_error.as_ref().filter(|(row, _)| *row == k) {
@@ -6744,6 +6868,9 @@ pub fn post_to(app: &mut SolveApp, setup: u64, op: Option<u64>, path: &str) {
 
 #[path = "cam_ui_confirm.rs"]
 mod confirm;
+
+#[path = "cam_machine_view.rs"]
+pub mod machine_view;
 
 #[cfg(test)]
 #[path = "cam_ui_tests.rs"]
