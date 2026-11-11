@@ -1,3 +1,12 @@
+> **This is a fork.** The branch `cam` adds CAM with rotary axes to SolidCraft. A machine is
+> described as a chain of up to nine axes, and A, B and C can be rotary, so a five-axis machine
+> can be defined. Setups and the post use only A so far: indexed 3+1, with the post writing
+> `G0 A…` for grblHAL. Nothing beyond A has been run on a machine, and A is being tested on a
+> FlexiHAL. It is not part of SolidCraft and is not endorsed by Tangency Labs. It started from
+> Ivica Safranko's branch `cam-rp23` as it stood on 2026-10-31 (tag
+> `ivisaf-cam-rp23-20261031`). Ivica no longer works on it, and everything after that tag is
+> maintained here. Questions about this fork belong here, not with SolidCraft or Ivica.
+
 <p align="center">
   <img src="assets/icons/app/linux/exports/hicolor/256x256/apps/io.tangencylabs.solidcraft.png" width="96" height="96" alt="SolidCraft" />
 </p>
