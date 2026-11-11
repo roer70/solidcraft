@@ -2496,6 +2496,34 @@ fn a_machine_is_entered_in_its_form_and_changed_in_one_step() {
     assert_eq!(pivot(&h), -98.08);
 }
 
+/// Where A waits while it turns is typed in its row: only the boxes filled are sent, the
+/// machine keeps them, and the form opens with them again. Emptied, the machine has none.
+#[test]
+fn a_rotary_axis_takes_where_the_tool_waits_from_its_row() {
+    use solidcraft_engine::doc::manufacture::{MachineAxis, TurnAt};
+    let mut h = lab();
+    h.app.start("cam.machine.add");
+    let mut f = flexihal_form();
+    f.axes[0].turn_at = [String::new(), "-100".into(), String::new()];
+    h.app.manufacture.form = Some(Form::Machine(Box::new(f)));
+    h.frames(2);
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    let turn_at = |h: &Harness| match &h.app.session.doc.manufacture.machines[0].axes[0] {
+        MachineAxis::Rotary { turn_at, .. } => *turn_at,
+        other => panic!("not rotary: {other:?}"),
+    };
+    assert_eq!(turn_at(&h), Some(TurnAt { y: Some(-100.0), ..TurnAt::default() }));
+
+    let mut f = MachineForm::of(&h.app.session.doc.manufacture.machines[0]);
+    assert_eq!(f.axes[0].turn_at, [String::new(), "-100".to_string(), String::new()]);
+    f.axes[0].turn_at[1].clear();
+    h.app.manufacture.form = Some(Form::Machine(Box::new(f)));
+    apply(&mut h.app);
+    assert_eq!(h.app.manufacture.error, None);
+    assert_eq!(turn_at(&h), None);
+}
+
 /// A refusal that names an axis is shown at that axis, and the form stays open with it.
 #[test]
 fn a_machine_axis_the_engine_refuses_shows_its_error_at_its_row() {

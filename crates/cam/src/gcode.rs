@@ -48,13 +48,27 @@ pub struct Program {
 }
 
 /// A turn of the rotary A axis before a program cuts: the tool is lifted to `safe_z` in the
-/// machine's coordinates (`G53`), clear of the part whichever way it turns, and then A turns.
+/// machine's coordinates (`G53`), moved aside to `park_x` and `park_y` if given, clear of the
+/// part whichever way it turns, and then A turns.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Turn {
     /// The A angle, in degrees.
     pub a: f64,
     /// The machine Z the tool is lifted to before A turns (mm, machine coordinates).
     pub safe_z: f64,
+    /// Where the tool then moves sideways before A turns (mm, machine coordinates; none: it
+    /// stays where it is along that axis).
+    #[serde(default)]
+    pub park_x: Option<f64>,
+    #[serde(default)]
+    pub park_y: Option<f64>,
+}
+
+impl Turn {
+    /// A turn to `a` after lifting to `safe_z`, with no move sideways.
+    pub fn lift(a: f64, safe_z: f64) -> Self {
+        Turn { a, safe_z, park_x: None, park_y: None }
+    }
 }
 
 /// Furthest an A angle is written (degrees).
@@ -152,6 +166,34 @@ impl Writer<'_> {
     /// Forget where the tool is: the next move states every axis.
     fn reset(&mut self) {
         (self.x, self.y, self.z, self.pos, self.feed) = (None, None, None, None, None);
+    }
+
+    /// Turns A as `turn` says: up to the safe Z in machine coordinates (`G53`), then aside if
+    /// it says, then A. Z on a line of its own first, so the tool never moves sideways low down.
+    /// Afterwards where the tool is in work coordinates is forgotten. Written in one piece so it
+    /// can turn between operations as well as before the first.
+    fn turn(&mut self, turn: &Turn) -> Result<()> {
+        if !turn.a.is_finite() || turn.a.abs() > MAX_A {
+            return invalid(format!("the A angle must be a number within ±{MAX_A}°"));
+        }
+        if !turn.safe_z.is_finite() || turn.safe_z.abs() > MAX_SAFE_Z {
+            return invalid(format!("the safe Z must be a number within ±{MAX_SAFE_Z} mm"));
+        }
+        if [turn.park_x, turn.park_y].into_iter().flatten().any(|v| !v.is_finite() || v.abs() > MAX_SAFE_Z) {
+            return invalid(format!("where the tool waits while A turns must be a number within ±{MAX_SAFE_Z} mm"));
+        }
+        let rapid = self.motion(0);
+        let z = self.coord(turn.safe_z);
+        self.block(&format!("G53 {rapid} Z{z}"));
+        let aside: String =
+            [('X', turn.park_x), ('Y', turn.park_y)].into_iter().filter_map(|(c, v)| v.map(|v| format!(" {c}{}", self.coord(v)))).collect();
+        if !aside.is_empty() {
+            self.block(&format!("G53 {rapid}{aside}"));
+        }
+        let a = self.value(turn.a, self.post.decimals);
+        self.block(&format!("{rapid} A{a}"));
+        self.reset();
+        Ok(())
     }
 
     /// A `G0`/`G1` block for the axes among `xy` and `z` that change; nothing if none does.
@@ -284,17 +326,7 @@ pub fn emit(program: &Program, post: &Post) -> Result<String> {
         w.block(&wcs);
     }
     if let Some(turn) = program.turn {
-        if !turn.a.is_finite() || turn.a.abs() > MAX_A {
-            return invalid(format!("the A angle must be a number within ±{MAX_A}°"));
-        }
-        if !turn.safe_z.is_finite() || turn.safe_z.abs() > MAX_SAFE_Z {
-            return invalid(format!("the safe Z must be a number within ±{MAX_SAFE_Z} mm"));
-        }
-        // Up first, in machine coordinates, so the part turns clear of the tool.
-        let (rapid, z) = (w.motion(0), w.coord(turn.safe_z));
-        w.block(&format!("G53 {rapid} Z{z}"));
-        let a = w.value(turn.a, post.decimals);
-        w.block(&format!("{rapid} A{a}"));
+        w.turn(&turn)?;
     }
     let lift = Vec3::new(0.0, 0.0, safety.air_cut);
     let mut tool: Option<u32> = None;

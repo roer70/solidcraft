@@ -4849,20 +4849,22 @@ fn sheet(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Where a setup's program turns A before it cuts: when its machine has a rotary A, to the
-/// angle that brings the setup's tool axis to the tool, after lifting to the top of the
-/// machine's Z. None on no machine or one without A.
+/// angle that brings the setup's tool axis to the tool, after lifting to where A's `turn_at`
+/// says (else the top of the machine's Z) and moving aside to its X and Y. None on no machine
+/// or one without A.
 fn a_turn(s: &Session, setup: &Setup) -> std::result::Result<Option<cam::Turn>, String> {
     let Some(machine) = setup.machine.as_deref().and_then(|m| s.doc.manufacture.machine(m)) else {
         return Ok(None);
     };
-    if !matches!(machine.axis(AxisName::A), Some(MachineAxis::Rotary { .. })) {
+    let Some(MachineAxis::Rotary { turn_at, .. }) = machine.axis(AxisName::A) else {
         return Ok(None);
-    }
+    };
+    let at = turn_at.unwrap_or_default();
     let a = machine.a_angle(setup.axis)?;
     let Some(MachineAxis::Linear { max, .. }) = machine.axis(AxisName::Z) else {
         return Err(format!("machine \"{}\" has no Z travel to lift the tool to before A turns", machine.name));
     };
-    Ok(Some(cam::Turn { a, safe_z: *max }))
+    Ok(Some(cam::Turn { a, safe_z: at.z.unwrap_or(*max), park_x: at.x, park_y: at.y }))
 }
 
 fn post(s: &mut Session, p: &Value) -> Result<Value> {

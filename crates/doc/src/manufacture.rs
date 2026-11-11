@@ -98,7 +98,8 @@ impl Machine {
     }
 
     /// Checks that the machine can be used: a name, at least one axis and no more than
-    /// [`MAX_MACHINE_AXES`], no axis named twice, and every axis sound.
+    /// [`MAX_MACHINE_AXES`], no axis named twice, every axis sound, and every place a rotary
+    /// axis waits at within the travel of the linear axes it names.
     pub fn check(&self) -> std::result::Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("a machine has no name".into());
@@ -117,6 +118,19 @@ impl Machine {
             axis.check().map_err(|e| format!("machine \"{name}\", axis {}: {e}", axis.name().label()))?;
             if self.axes[..i].iter().any(|a| a.name() == axis.name()) {
                 return Err(format!("machine \"{name}\" has two {} axes", axis.name().label()));
+            }
+        }
+        for axis in &self.axes {
+            if let MachineAxis::Rotary { name: turning, turn_at: Some(at), .. } = axis {
+                for (axis_along, v) in at.named() {
+                    let (turning, along) = (turning.label(), axis_along.label());
+                    let Some(MachineAxis::Linear { min, max, .. }) = self.axis(axis_along) else {
+                        return Err(format!("machine \"{name}\", axis {turning}: it waits at {along}, and the machine has no linear {along} axis"));
+                    };
+                    if !v.is_finite() || v < *min || v > *max {
+                        return Err(format!("machine \"{name}\", axis {turning}: it waits at {along} {v}, outside {along}'s travel {min} to {max}"));
+                    }
+                }
             }
         }
         if self.post.as_deref().is_some_and(|p| p.trim().is_empty()) {
@@ -179,7 +193,30 @@ pub enum MachineAxis {
         pivot: Vec3,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limits: Option<[f64; 2]>,
+        /// Where the tool waits while this axis turns (none: Z to the top of its travel).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_at: Option<TurnAt>,
     },
+}
+
+/// Where the tool waits while a rotary axis turns, in machine coordinates (mm), per linear
+/// axis: Z first, then the others, so it never moves sideways low down. A Z left out is the top
+/// of Z's travel; an X or Y left out stays where it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TurnAt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<f64>,
+}
+
+impl TurnAt {
+    /// The axes it names, with their values.
+    pub fn named(&self) -> impl Iterator<Item = (AxisName, f64)> {
+        [(AxisName::X, self.x), (AxisName::Y, self.y), (AxisName::Z, self.z)].into_iter().filter_map(|(n, v)| v.map(|v| (n, v)))
+    }
 }
 
 impl MachineAxis {

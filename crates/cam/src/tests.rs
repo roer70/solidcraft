@@ -1020,7 +1020,7 @@ fn grblhal_calls_later_tools_with_m6_and_no_length_offset_word() {
 fn a_program_lifts_to_the_machine_s_top_and_turns_a_before_it_cuts() {
     let plain = drill_program();
     let mut turned = drill_program();
-    turned.turn = Some(Turn { a: 180.0, safe_z: 0.0 });
+    turned.turn = Some(Turn::lift(180.0, 0.0));
     let text = emit(&turned, &Post::grblhal()).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     let header = lines.iter().position(|l| l.starts_with("G17 ")).unwrap();
@@ -1028,7 +1028,7 @@ fn a_program_lifts_to_the_machine_s_top_and_turns_a_before_it_cuts() {
     assert_eq!(parse(&text).unwrap(), parse(&emit(&plain, &Post::grblhal()).unwrap()).unwrap());
 
     // As the post writes numbers and codes, with Z in its units; A is in degrees whatever they are.
-    turned.turn = Some(Turn { a: -90.0, safe_z: -25.4 });
+    turned.turn = Some(Turn::lift(-90.0, -25.4));
     let lnc = emit(&turned, &Post::lnc()).unwrap();
     assert!(lnc.contains("\nG53 G00 Z-25.4\nG00 A-90.\n"), "{lnc}");
     let mut inch = Post::rs274();
@@ -1036,9 +1036,35 @@ fn a_program_lifts_to_the_machine_s_top_and_turns_a_before_it_cuts() {
     let text = emit(&turned, &inch).unwrap();
     assert!(text.contains("\nG53 G0 Z-1\nG0 A-90\n"), "{text}");
 
-    for turn in [Turn { a: f64::NAN, safe_z: 0.0 }, Turn { a: 0.0, safe_z: f64::INFINITY }, Turn { a: 1.0e7, safe_z: 0.0 }] {
+    for turn in [Turn::lift(f64::NAN, 0.0), Turn::lift(0.0, f64::INFINITY), Turn::lift(1.0e7, 0.0)] {
         turned.turn = Some(turn);
         assert!(emit(&turned, &Post::grbl()).is_err(), "{turn:?}");
+    }
+}
+
+/// A turn that parks the tool aside lifts Z first on a line of its own, then moves across in
+/// machine coordinates, then turns A; the read-back still sees the same toolpath. Only the axes
+/// it names move aside, in the post's units.
+#[test]
+fn a_turn_lifts_then_moves_aside_before_a_turns() {
+    let plain = drill_program();
+    let mut turned = drill_program();
+    turned.turn = Some(Turn { park_y: Some(-100.0), ..Turn::lift(180.0, 0.0) });
+    let text = emit(&turned, &Post::grblhal()).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let header = lines.iter().position(|l| l.starts_with("G17 ")).unwrap();
+    assert_eq!(&lines[header + 1..header + 5], ["G53 G0 Z0", "G53 G0 Y-100", "G0 A180", "(Drill: T3 D5 drill)"], "{text}");
+    assert_eq!(parse(&text).unwrap(), parse(&emit(&plain, &Post::grblhal()).unwrap()).unwrap());
+
+    turned.turn = Some(Turn { park_x: Some(-50.8), park_y: Some(-25.4), ..Turn::lift(90.0, -25.4) });
+    let mut inch = Post::rs274();
+    inch.units = Units::Inch;
+    let text = emit(&turned, &inch).unwrap();
+    assert!(text.contains("\nG53 G0 Z-1\nG53 G0 X-2 Y-1\nG0 A90\n"), "{text}");
+
+    for park in [f64::NAN, f64::INFINITY, 1.0e7] {
+        turned.turn = Some(Turn { park_x: Some(park), ..Turn::lift(0.0, 0.0) });
+        assert!(emit(&turned, &Post::grbl()).is_err(), "{park}");
     }
 }
 

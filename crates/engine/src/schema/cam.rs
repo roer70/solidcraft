@@ -5,7 +5,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use solidcore_record::Vec3;
-use solidcraft_doc::manufacture::{AxisName, Carrier, Machine, MachineAxis};
+use solidcraft_doc::manufacture::{AxisName, Carrier, Machine, MachineAxis, TurnAt};
 
 /// The name of a machine axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -57,7 +57,24 @@ pub enum MachineAxisParam {
         /// turns round and round.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limits: Option<[f64; 2]>,
+        /// Where the tool waits while it turns, mm in machine coordinates, each within its
+        /// axis's travel: Z first, then X and Y. Default: Z to the top of its travel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_at: Option<TurnAtParam>,
     },
+}
+
+/// Where the tool waits while a rotary axis turns: any of X, Y and Z (mm, machine coordinates).
+/// Z left out: the top of its travel; X or Y left out: where it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TurnAtParam {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<f64>,
 }
 
 impl From<AxisNameParam> for AxisName {
@@ -91,7 +108,7 @@ impl From<MachineAxisParam> for MachineAxis {
         let v = |[x, y, z]: [f64; 3]| Vec3::new(x, y, z);
         match a {
             MachineAxisParam::Linear { name, min, max } => MachineAxis::Linear { name: name.into(), min, max },
-            MachineAxisParam::Rotary { name, axis, on, pivot, limits } => MachineAxis::Rotary {
+            MachineAxisParam::Rotary { name, axis, on, pivot, limits, turn_at } => MachineAxis::Rotary {
                 name: name.into(),
                 axis: v(axis),
                 on: match on {
@@ -100,6 +117,7 @@ impl From<MachineAxisParam> for MachineAxis {
                 },
                 pivot: v(pivot),
                 limits,
+                turn_at: turn_at.map(|t| TurnAt { x: t.x, y: t.y, z: t.z }),
             },
         }
     }
@@ -110,7 +128,7 @@ impl From<&MachineAxis> for MachineAxisParam {
         let v = |p: Vec3| [p.x, p.y, p.z];
         match a {
             MachineAxis::Linear { name, min, max } => MachineAxisParam::Linear { name: (*name).into(), min: *min, max: *max },
-            MachineAxis::Rotary { name, axis, on, pivot, limits } => MachineAxisParam::Rotary {
+            MachineAxis::Rotary { name, axis, on, pivot, limits, turn_at } => MachineAxisParam::Rotary {
                 name: (*name).into(),
                 axis: v(*axis),
                 on: match on {
@@ -119,6 +137,7 @@ impl From<&MachineAxis> for MachineAxisParam {
                 },
                 pivot: v(*pivot),
                 limits: *limits,
+                turn_at: turn_at.map(|t| TurnAtParam { x: t.x, y: t.y, z: t.z }),
             },
         }
     }

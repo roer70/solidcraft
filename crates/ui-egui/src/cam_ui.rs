@@ -194,6 +194,9 @@ pub struct AxisRow {
     pub pivot: [String; 3],
     /// Its limits in degrees; both empty: it turns round and round.
     pub limits: [String; 2],
+    /// Where the tool waits while it turns: X, Y and Z in mm, machine coordinates. An empty Z
+    /// is the top of Z's travel; an empty X or Y stays where it is.
+    pub turn_at: [String; 3],
     /// Where the form's picture has it, mm or degrees (`None`: the middle of its travel, or 0°).
     /// Only shown; nothing is sent to a machine.
     pub at: Option<f64>,
@@ -229,6 +232,7 @@ impl AxisRow {
             head: false,
             pivot: ["0".into(), "0".into(), "0".into()],
             limits: Default::default(),
+            turn_at: Default::default(),
             at: None,
         }
     }
@@ -268,7 +272,7 @@ impl AxisRow {
             [Some(low), Some(high)] if low < high => Some([low, high]),
             _ => None,
         };
-        (axis.len() > 1e-9).then_some(MachineAxis::Rotary { name, axis, on, pivot: Vec3::new(px, py, pz), limits })
+        (axis.len() > 1e-9).then_some(MachineAxis::Rotary { name, axis, on, pivot: Vec3::new(px, py, pz), limits, turn_at: None })
     }
 
     /// The range its slider spans: its travel, its limits, or a turn either way.
@@ -301,7 +305,7 @@ impl MachineForm {
                     max: num(*max),
                     ..AxisRow::linear(0)
                 },
-                MachineAxis::Rotary { name, axis, on, pivot, limits } => {
+                MachineAxis::Rotary { name, axis, on, pivot, limits, turn_at } => {
                     let d = [axis.x, axis.y, axis.z];
                     let about = TURN_DIRECTIONS.iter().position(|(_, v)| *v == d).unwrap_or(TURN_DIRECTIONS.len() - 1);
                     AxisRow {
@@ -314,6 +318,7 @@ impl MachineForm {
                         head: *on == Carrier::Head,
                         pivot: [pivot.x, pivot.y, pivot.z].map(num),
                         limits: limits.map_or_else(Default::default, |l| l.map(num)),
+                        turn_at: turn_at.map_or_else(Default::default, |t| [t.x, t.y, t.z].map(|v| v.map(num).unwrap_or_default())),
                         at: None,
                     }
                 }
@@ -1615,6 +1620,16 @@ pub fn command(form: &Form) -> Result<(&'static str, Value), String> {
                     // Both empty: round and round.
                     if a.limits.iter().any(|l| !l.trim().is_empty()) {
                         axis["limits"] = json!([mm("Lower limit", &a.limits[0])?, mm("Upper limit", &a.limits[1])?]);
+                    }
+                    // All empty: Z to the top of its travel, nothing aside.
+                    let mut turn_at = serde_json::Map::new();
+                    for ((key, what), text) in [("x", "Turn at X"), ("y", "Turn at Y"), ("z", "Turn at Z")].into_iter().zip(&a.turn_at) {
+                        if !text.trim().is_empty() {
+                            turn_at.insert(key.into(), json!(mm(what, text)?));
+                        }
+                    }
+                    if !turn_at.is_empty() {
+                        axis["turn_at"] = Value::Object(turn_at);
                     }
                     axes.push(axis);
                 } else {
@@ -3622,6 +3637,9 @@ fn help(label: &str) -> Option<&'static str> {
         "Pivot" => "A point on the axis's centre line, in machine coordinates (mm).",
         "Carried by" => "Table: the part turns with the axis. Head: the tool turns with it.",
         "Limits" => "How far the axis may turn, lowest and highest in degrees. Both empty: round and round, as a rotary table with no stops.",
+        "Turn at" => {
+            "Where the tool waits while the axis turns, in machine coordinates (mm): first up to Z, then across to X and Y, clear of all the axis sweeps. Empty Z: the top of its travel. Empty X or Y: it stays where it is."
+        }
         _ => return None,
     })
 }
@@ -4694,6 +4712,7 @@ fn machine_grid(ui: &mut egui::Ui, f: &mut MachineForm, choices: &Choices, need:
             labelled(ui, "Limits (deg)", |ui| {
                 boxes(ui, ("limits", k), &mut a.limits, &["none: continuous", "none: continuous"], one_limit, "Limits", false)
             });
+            labelled(ui, "Turn at (mm)", |ui| boxes(ui, ("turn_at", k), &mut a.turn_at, &["X", "Y", "Z"], false, "Turn at", true));
         } else {
             labelled(ui, "Travel (mm)", |ui| {
                 let mut travel = [std::mem::take(&mut a.min), std::mem::take(&mut a.max)];

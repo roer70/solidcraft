@@ -2846,6 +2846,57 @@ fn the_post_turns_a_to_each_setup_in_one_clamping() {
     assert!(e.contains("not square to the rotary axis"), "{e}");
 }
 
+/// FlexiHAL's A told to wait aside: the program lifts to the top of Z, moves to Y −100 and then
+/// turns A; a Z of its own replaces the top of the travel. The design keeps it, and the list
+/// shows it. A place outside the travel, or along an axis the machine lacks, is refused.
+#[test]
+fn a_rotary_axis_says_where_the_tool_waits_while_it_turns() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 40, "height": 10}));
+    let mut machine = flexihal();
+    machine["axes"][0]["turn_at"] = json!({"y": -100});
+    run(&mut s, "cam.machine.add", machine);
+    run(&mut s, "cam.tool.define", json!({"number": 1, "kind": "flat", "diameter": 6}));
+    let centre = json!({"of": "stock", "x": "min", "y": "center", "z": "center"});
+    run(&mut s, "cam.setup.create", json!({"name": "Top", "origin": centre, "machine": "FlexiHAL"}));
+    run(&mut s, "cam.setup.create", json!({"name": "Bottom", "axis": "-z", "stock_from": "Top", "same_clamping": true}));
+    run(&mut s, "cam.op.face", json!({"setup": "Bottom", "tool": 1, "spindle_rpm": 10000, "feed": 800, "stepover": 5, "stepdown": 1}));
+    let post = |s: &mut Session| run(s, "cam.post", json!({"setup": "Bottom"}))["gcode"].as_str().unwrap().to_string();
+    let text = post(&mut s);
+    assert!(text.contains("\nG53 G0 Z0\nG53 G0 Y-100\nG0 A180\n"), "{text}");
+
+    s.doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into();
+    let listed = run(&mut s, "cam.machine.list", json!({}));
+    assert_eq!(listed["machines"][0]["axes"][0]["turn_at"], json!({"y": -100.0}));
+
+    let mut axes = flexihal()["axes"].clone();
+    axes[0]["turn_at"] = json!({"y": -100, "z": -10});
+    run(&mut s, "cam.machine.edit", json!({"machine": "FlexiHAL", "axes": axes}));
+    let text = post(&mut s);
+    assert!(text.contains("\nG53 G0 Z-10\nG53 G0 Y-100\nG0 A180\n"), "{text}");
+
+    let refused = |s: &mut Session, turn_at: Value, says: &str| {
+        let before = s.doc.manufacture.clone();
+        let mut axes = flexihal()["axes"].clone();
+        axes[0]["turn_at"] = turn_at.clone();
+        let e = s.execute("cam.machine.edit", &json!({"machine": "FlexiHAL", "axes": axes})).unwrap_err().to_string();
+        assert!(e.contains(says), "{turn_at}: {e}");
+        assert_eq!(s.doc.manufacture, before, "{turn_at} changed the design");
+    };
+    refused(&mut s, json!({"y": 10}), "outside Y's travel -1023 to 0");
+    refused(&mut s, json!({"z": -161}), "outside Z's travel -160 to 0");
+    refused(&mut s, json!({"y": "far"}), "invalid type");
+    refused(&mut s, json!({"b": 0}), "unknown field `b`");
+    let e = s
+        .execute(
+            "cam.machine.add",
+            &json!({"name": "Bare A", "axes": [{"type": "rotary", "name": "A", "axis": [1, 0, 0], "on": "table", "turn_at": {"x": 0}}]}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("axis A: it waits at X, and the machine has no linear X axis"), "{e}");
+}
+
 /// A machine is added, a setup runs on it and takes its post, and the design saves, loads and
 /// lists it with the setup on it.
 #[test]
