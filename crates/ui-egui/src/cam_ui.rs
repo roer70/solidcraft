@@ -3549,9 +3549,6 @@ fn help(label: &str) -> Option<&'static str> {
         "Clamps" => {
             "What holds the stock and no tool may touch: a box from-to across, in the setup's work coordinates, up to its top. Operations whose tool comes into one are warned about."
         }
-        "Stock from" => {
-            "Where this setup's stock comes from: its own box round the part, or what an earlier setup leaves of it (the part turned over for its other side, say: the earlier setup's tool axis turned over)."
-        }
         "Setup" => "Which of the design's setups the operation goes into: it cuts in that setup's stock, along its tool axis.",
         "Same clamping" => {
             "The part stays clamped as for the setup its stock comes from and is only turned with the A axis. Its work zero and work offset are that setup's: on the A axis, they stay put while A turns."
